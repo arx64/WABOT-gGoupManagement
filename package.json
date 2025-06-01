@@ -1,0 +1,23 @@
+{
+  "name": "zoom-reminder",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "axios": "^1.7.7",
+    "better-sqlite3": "^11.3.0",
+    "dayjs": "^1.11.13",
+    "knex": "^3.1.0",
+    "openai": "^4.64.0",
+    "qrcode-terminal": "^0.12.0",
+    "request": "^2.88.2"
+  }
+}
