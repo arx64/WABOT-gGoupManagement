@@ -24,13 +24,13 @@ const getAllMember = async (sock, message, senderJid) => {
     const numbers = members.map(m => m.id.replace('@s.whatsapp.net', ''));
 
     // Simpan ke file txt
-    const filePath = path.join(__dirname, `all_members ${groupName}.txt`);
+    const filePath = path.join(__dirname, 'all_members.txt');
     fs.writeFileSync(filePath, numbers.join('\n'));
 
     // Kirim file ke pengirim
     await sock.sendMessage(senderJid, {
       document: fs.readFileSync(filePath),
-      fileName: `all_members ${groupName}.txt`,
+      fileName: `all_members of ${groupName}.txt`,
       mimetype: 'text/plain'
     });
 

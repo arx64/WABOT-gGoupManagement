@@ -84,7 +84,7 @@ async function connectToWhatsApp () {
       case !!(message.videoMessage && message.videoMessage.caption):
         chatMessage = message.videoMessage.caption; // Jika pesan adalah video dengan keterangan
         break;
-
+        
       // default:
       //   // Jika tipe pesan tidak diketahui, atau belum di-handle
       //   chatMessage = 'Maaf, saya belum bisa memahami tipe pesan ini.';
@@ -100,7 +100,7 @@ async function connectToWhatsApp () {
 
     const sessionID = m.messages[0].key.remoteJid; // Session ID bisa disesuaikan sesuai kebutuhan
     const remoteJid = m.messages[0].key.remoteJid; // Pengguna yang mengirim pesan
-    console.log(m.messages[0].message);
+    // console.log(m.messages[0].message);
 
     // Handle semua perintah
 
@@ -113,11 +113,11 @@ async function connectToWhatsApp () {
 /ai [Pesan] - Untuk chat dengan AI
 /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
 /list - Melihat semua list yang telah berada di auto reminder
-/add - Untuk menambahkan reminder ke database
+/addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
 /delete - Untuk menghapus reminder
+/add - Untuk add member di dalam grup
 /tagall - Tag Semua orang ( Khusus Grup! )
 /kick - Untuk kick member di dalam grup
-/addMember - Untuk add member di dalam grup
 /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
 /getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt`,
           mentions: [numberUser],
@@ -133,12 +133,13 @@ async function connectToWhatsApp () {
           text: `Halo *${pushName}*, menu saat ini adalah:
 /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
 /list - Melihat semua list yang telah berada di auto reminder
-/add - Untuk menambahkan reminder ke database
-/ai [Pesan] - Untuk chat dengan AI
+/addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
 /delete - Untuk menghapus reminder
+/add - Untuk add member di dalam grup
 /tagall - Tag Semua orang ( Khusus Grup! )
-/kick - Untuk kick member ( Khusus Grup! )
-/addMember - Untuk add member ( Khusus Grup! )`,
+/kick - Untuk kick member di dalam grup
+/new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
+/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt`,
         },
         { quoted: m.messages[0] }
       );
@@ -207,7 +208,7 @@ async function connectToWhatsApp () {
     }
 
     // Handle perintah /add
-    if (chatMessage.startsWith('/addMember')) {
+    if (chatMessage.startsWith('/add')) {
       const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
 
       if (!groupJid) {
@@ -220,23 +221,21 @@ async function connectToWhatsApp () {
     }
 
     // Handle perintah /kick
-    if (chatMessage.startsWith('/kick') || message.extendedTextMessage.text == '/kick') {
+    if (chatMessage.startsWith('/kick') || message.extendedTextMessage?.text == '/kick') {
       // const numberKick = message.extendedTextMessage.contextInfo.participant;
       // await sock.sendMessage(remoteJid, { text: `testing Kick dengan Nomor calon kick: ${numberKick}` });
 
-        const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
-        if (!groupJid) {
-          await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
-          return;
-        }
-
-        await handleKickCommand(sock, m, groupJid); // Sertakan groupJid dalam pemanggilan fungsi
-        return;
+      const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
+      if (!groupJid) {
+        await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
       }
+
+      await handleKickCommand(sock, m, groupJid); // Sertakan groupJid dalam pemanggilan fungsi
+    }
     
     // Handle perintah /add
     // Mengganti case '/add' dengan pengecekan startsWith
-    if (chatMessage.startsWith('/add')) {
+    if (chatMessage.startsWith('/addList')) {
       // Memecah pesan untuk mendapatkan parameter jadwal
       const regex = /\/add\s+"([^"]+)"\s+(https:\/\/[^\s]+)\s+([0-9]{2}[.:][0-9]{2})\s+(.+)/;
       const perintah = chatMessage.split(' ')[1];
@@ -260,7 +259,7 @@ async function connectToWhatsApp () {
           console.error('Error menambahkan jadwal:', error);
           await sock.sendMessage(remoteJid, { text: 'Terjadi kesalahan saat menambahkan jadwal.' }, { quoted: m.messages[0] });
         }
-      } else if (perintah === '/add') {
+      } else if (perintah === '/addList') {
         await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /add "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
       } else {
         await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /add "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
