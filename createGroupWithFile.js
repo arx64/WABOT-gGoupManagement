@@ -10,7 +10,7 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
   // Validasi input
   if (!message || !message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.documentWithCaptionMessage?.message?.documentMessage || !message.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
     console.error('❌ Message tidak valid:', message);
-    await sock.sendMessage(senderJid, { text: '❗ Pastikan Anda membalas file .txt berisi nomor, lalu gunakan perintah:\n`/new "Nama Grup"`' });
+    await sock.sendMessage(senderJid, { text: '❗ Pastikan Anda membalas file .txt berisi nomor, lalu gunakan perintah:\n`/new "Nama Grup"`' }, { qouted: message});
     return;
   }
 
@@ -31,7 +31,7 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
   // Cek apakah quoted message berisi file teks
   if (!quoted?.documentMessage || !quoted.documentMessage.mimetype.includes('text/plain')) {
     console.error('❌ Quoted message tidak valid:', quoted);
-    await sock.sendMessage(senderJid, { text: `❗ Pastikan Anda membalas file .txt berisi nomor.` });
+    await sock.sendMessage(senderJid, { text: `❗ Pastikan Anda membalas file .txt berisi nomor.` }, { qouted: message });
     return;
   }
   
@@ -61,7 +61,7 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
   );
   if (!buffer) {
     console.error('❌ Gagal mengunduh file.');
-    await sock.sendMessage(senderJid, { text: '❗ Gagal mengunduh file. Pastikan file yang Anda kirim adalah file .txt.' });
+    await sock.sendMessage(senderJid, { text: '❗ Gagal mengunduh file. Pastikan file yang Anda kirim adalah file .txt.' }, { qouted: message });
     return;
   }
 
@@ -73,7 +73,7 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
   const rawData = fs.readFileSync(tempPath, 'utf-8');
   if (!rawData.trim()) {
     console.error('❌ File kosong.');
-    await sock.sendMessage(senderJid, { text: '❗ File yang Anda kirim kosong. Harap unggah file dengan daftar nomor telepon.' });
+    await sock.sendMessage(senderJid, { text: '❗ File yang Anda kirim kosong. Harap unggah file dengan daftar nomor telepon.' }, { qouted: message });
     fs.unlinkSync(tempPath); // Hapus file sementara
     return;
   }
@@ -95,7 +95,7 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
 
   if (!participants.length) {
     console.error('❌ Tidak ada nomor valid dalam file.');
-    await sock.sendMessage(senderJid, { text: '❗ Tidak ada nomor telepon valid dalam file.' });
+    await sock.sendMessage(senderJid, { text: '❗ Tidak ada nomor telepon valid dalam file.' }, { qouted: message });
     fs.unlinkSync(tempPath); // Hapus file sementara
     return;
   }
@@ -107,13 +107,16 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
   const groupName = groupNameRaw.replace(/^\/new\s+/i, '').replace(/^["']|["']$/g, '');
   if (!groupName.trim()) {
     console.error('❌ Nama grup kosong.');
-    await sock.sendMessage(senderJid, { text: '❗ Nama grup tidak boleh kosong. Gunakan format:\n`/new "Nama Grup"`' });
+    await sock.sendMessage(senderJid, { text: '❗ Nama grup tidak boleh kosong. Gunakan format:\n`/new "Nama Grup"`' }, { qouted: message });
     fs.unlinkSync(tempPath); // Hapus file sementara
     return;
   }
 
   // Buat grup baru
   const groupResult = await sock.groupCreate(groupName, participants);
+  if (groupResult.id) {
+    await sock.sendMessage(senderJid, { text: `✅ Grup *${groupName}* berhasil dibuat!` }, { qouted: message });
+  }
   console.log(`✅ Grup berhasil dibuat: ${groupResult.id}`);
   console.log(`Info grup:`, groupResult);
 
@@ -135,6 +138,6 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
 
   // Kirim notifikasi sukses
   const link = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : 'Link undangan tidak tersedia.';
-  await sock.sendMessage(senderJid, { text: `✅ Grup *${groupName}* berhasil dibuat!\nℹ️ *${groupResult.participants.length}* Peserta Berhasil Ditambahkan!\n📍 Link: ${link}` });
+  await sock.sendMessage(senderJid, { text: `✅ Grup *${groupName}* berhasil dibuat!\nℹ️ *${groupResult.participants.length} Peserta* Berhasil Ditambahkan!\n📍 Link: ${link}` }, { qouted: message });
 };
 module.exports = { createGroupWithFile };

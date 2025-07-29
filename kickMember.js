@@ -1,34 +1,32 @@
 // Fungsi untuk memeriksa apakah pengguna adalah admin grup
+function normalizeJid(jid) {
+  return jid.replace(/:\d+/, ''); // hapus :6, :1, dll
+}
+
 async function isAdmin(sock, participant, groupJid) {
   try {
     const groupMembers = await sock.groupMetadata(groupJid);
 
-    // Cetak data untuk debugging
-    console.log(`groupMembers: ${JSON.stringify(groupMembers)}`);
+    const adminList = groupMembers.participants.filter((member) => member.admin === 'admin' || member.admin === 'superadmin').map((admin) => normalizeJid(admin.id));
 
-    // Filter anggota grup yang memiliki properti "admin"
-    const adminList = groupMembers.participants.filter((member) => member.admin === 'admin' || member.admin === 'superadmin').map((admin) => admin.id);
+    const normalizedParticipant = normalizeJid(participant);
 
-    // Cetak daftar admin untuk debugging
-    // console.log(`adminList: ${adminList}`);
-    // Cetak daftar admin untuk debugging
     console.log(`adminList: ${adminList}`);
-    console.log(`Participant to check: ${participant}`);
-    console.log(`Bot ID: ${sock.user.id}`);
+    console.log(`Participant to check: ${normalizedParticipant}`);
 
-    // Periksa apakah ID pengguna ada dalam daftar admin
-    return adminList.includes(participant);
+    return adminList.includes(normalizedParticipant);
   } catch (error) {
     console.error('Error saat memeriksa admin:', error);
     return false;
   }
 }
 
+
 // Fungsi utama untuk mengeluarkan anggota dari grup
 async function handleKickCommand(sock, m, groupJid) {
   try {
     if (!groupJid) {
-      await sock.sendMessage(m.messages[0].key.remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
+      await sock.sendMessage(m.messages[0].key.remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' }, { quoted: m.messages[0] });
       return;
     }
 
@@ -56,7 +54,8 @@ async function handleKickCommand(sock, m, groupJid) {
     const userToKick = `${phoneToKick}@s.whatsapp.net`;
 
     // Cek apakah bot adalah admin
-    const userJid = sock.user.id.replace(':1', '');
+    // const userJid = sock.user.id.replace(':1', '');
+    const userJid = sock.user.id.replace(/:\d+/, ''); // aman untuk semua suffix
     const isBotAdmin = await isAdmin(sock, userJid, groupJid);
     if (!isBotAdmin) {
       await sock.sendMessage(groupJid, { text: 'Bot harus menjadi admin untuk menjalankan perintah ini.' });

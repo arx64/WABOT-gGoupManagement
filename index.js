@@ -1,4 +1,7 @@
-const { DisconnectReason, makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
+
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const fetch = require('node-fetch');
+const readline = require('readline');
 const { responAI } = require('./gpt');
 const { fetchData } = require('./jadwalKelas');
 const { tagAll } = require('./tagAllFunc');
@@ -6,110 +9,140 @@ const { addReminder } = require('./addReminder');
 const { deleteReminder } = require('./deleteReminder');
 const { listReminders } = require('./listReminder');
 const { createGroupWithFile } = require('./createGroupWithFile');
-const handleAddCommand = require('./addMember'); // Import modul handleAddCommand
+const handleAddCommand = require('./addMember');
 const handleKickCommand = require('./kickMember');
-const { getAllMember } = require('./getAllMember'); // Import modul getAllMember
+const { getAllMember } = require('./getAllMember');
+const leaderboardDB = require('./db/leaderboard');
+const gameHandlers = require('./games/gameHandlers');
+const WebSocket = require('ws');
+const { getRandomWord } = require('./gameWords');
 
-// console.log(responAI);
+let sock;
+const activeGuess = new Map();      // userJid → { word }
+const userScores = {};              // userJid → skor
+const gameSessions = new Map(); // userJid → { game, jawaban, soal }
+const gameScores = {};          // userJid → { name, score }
 
-async function connectToWhatsApp () {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
-    // const { version, isLatest } = await fetchLatestBaileysVersion();
-    // console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`);
-    const sock = makeWASocket({
-      // can provide additional config here
-      version: (
-        await (
-        await fetch(
-        "https://raw.githubusercontent.com/WhiskeySockets/Baileys/master/src/Defaults/baileys-version.json"
-        )
-        ).json()
-        ).version,
-      printQRInTerminal: true,
-      auth: state,
-    });
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update
-        if(connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut
-            console.log('connection closed due to ', lastDisconnect.error, ', reconnecting ', shouldReconnect)
-            // reconnect if not logged out
-            if(shouldReconnect) {
-                connectToWhatsApp()
-            }
-        } else if(connection === 'open') {  
-            console.log('opened connection')
-        }
-    })
-    sock.ev.on('creds.update', saveCreds)
-    sock.ev.on('messages.upsert', async (m) => {
-  // Biar tidak spam kita kasih pengecualian
-  if (m.messages[0].key.fromMe) return; // Return ini adalah fungsi penolakan
+let pairingRequested = false;
+let phoneNumber = '6281934179820';
 
-  console.log(m.messages[0].pushName);
-  
-  try {
-    const pushName = m.messages[0].pushName;
-    // Cek apakah pesan berasal dari grup atau chat pribadi
-    const numberUser = m.messages[0].key.participant
-      ? m.messages[0].key.participant // Jika berasal dari grup
-      : m.messages[0].key.remoteJid; // Jika berasal dari chat pribadi
-    console.log(numberUser);
+async function connectToWhatsApp() {
+  const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
-    const message = m.messages[0].message;
-    const messageArr = m.messages[0];
+  sock = makeWASocket({
+    printQRInTerminal: false,
+    auth: state,
+  });
 
-    // console.log(`MEssage nya adalah: ` + message);
-    // console.log(`Message nya adalah: ${JSON.stringify(message)}`);
+  // sock = makeWASocket({
+  //   version: {
+  //     version: [2, 3000, 1023223821],
+  //   },
+  //   printQRInTerminal: false,
+  //   auth: state,
+  // });
 
-    // Menentukan pesan yang diterima berdasarkan tipe
-    // let chatMessage;
-    //  const chatMessage = m.messages[0].message.conversation ?? m.messages[0].message.extendedTextMessage?.text;
+  pairingRequested = false;
 
-    let chatMessage;
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect } = update;
 
-    switch (true) {
-      case !!message.conversation:
-        chatMessage = message.conversation; // Jika pesan berupa teks biasa
-        break;
-
-      case !!(message.extendedTextMessage && message.extendedTextMessage.text):
-        chatMessage = message.extendedTextMessage.text; // Jika pesan berupa extendedTextMessage
-        break;
-
-      case !!(message.imageMessage && message.imageMessage.caption):
-        chatMessage = message.imageMessage.caption; // Jika pesan adalah gambar dengan keterangan
-        break;
-
-      case !!(message.videoMessage && message.videoMessage.caption):
-        chatMessage = message.videoMessage.caption; // Jika pesan adalah video dengan keterangan
-        break;
-        
-      // default:
-      //   // Jika tipe pesan tidak diketahui, atau belum di-handle
-      //   chatMessage = 'Maaf, saya belum bisa memahami tipe pesan ini.';
-      //   await sock.sendMessage(
-      //     remoteJid, // ID pengguna yang mengirim pesan
-      //     { text: chatMessage }, // Balasan yang dikirimkan
-      //     { quoted: m.messages[0] } // Mengutip pesan pengguna
-      //   );
-      //   break;
+    console.log('📶 Status koneksi:', connection);
+    if (lastDisconnect?.error) {
+      console.error('🔴 Error:', lastDisconnect.error?.output?.payload?.message || lastDisconnect.error.message);
     }
 
-    console.log(`Pesan yang diterima di try-catch dari ${m.messages[0].key.remoteJid.replace('@s.whatsapp.net', '')}: ${chatMessage}`);
+    if (!pairingRequested && connection === 'connecting') {
+      // jangan jalankan kalau sudah login
+      if (state?.creds?.registered) {
+        pairingRequested = true;
+        return;
+      }
 
-    const sessionID = m.messages[0].key.remoteJid; // Session ID bisa disesuaikan sesuai kebutuhan
-    const remoteJid = m.messages[0].key.remoteJid; // Pengguna yang mengirim pesan
-    // console.log(m.messages[0].message);
+      pairingRequested = true;
+      setTimeout(async () => {
+        try {
+          const code = await sock.requestPairingCode(phoneNumber);
+          console.log('🔢 Pairing Code:', code);
+          console.log('📱 Buka WhatsApp > Perangkat Tertaut > Masukkan Kode');
+        } catch (err) {
+          console.error('❌ Gagal pairing:', err);
+        }
+      }, 2000);
+    }
+    
+    if (connection === 'open') {
+      console.log('✅ Terhubung ke WhatsApp!');
+      pairingRequested = true; // tidak perlu pairing lagi
+    }
 
-    // Handle semua perintah
+    if (connection === 'close') {
+      const reason = lastDisconnect?.error?.output?.statusCode;
+      console.log('❌ Koneksi tertutup. Alasan:', reason);
 
-    // Handle perintah /menu
-    if (chatMessage.startsWith('/menu') && remoteJid.endsWith('@g.us')) {
-      await sock.sendMessage(
-        remoteJid,
-        {
-          text: `Halo *@${numberUser.replace('@s.whatsapp.net', '')} (${pushName})*, menu saat ini adalah:
+        if (reason !== DisconnectReason.loggedOut) {
+          console.log('🔁 Mencoba reconnect dalam 5 detik...');
+          setTimeout(() => {
+            connectToWhatsApp(phoneNumber);
+          }, 5000);
+        } else {
+          console.log('🔒 Telah logout dari WhatsApp. Harap login ulang secara manual.');
+        }
+
+      if (reason === 515) {
+        console.log('🔁 Restart otomatis setelah pairing...');
+        pairingRequested = true;
+
+        // Tunggu 5 detik agar server WhatsApp siap menerima koneksi baru
+        setTimeout(() => {
+          if (sock?.ws?.readyState === 1) sock.ws.close();
+          connectToWhatsApp(phoneNumber);
+        }, 5000);
+      }
+      
+    }
+  });
+
+  sock.ev.on('creds.update', saveCreds);
+
+  sock.ev.on('messages.upsert', async (m) => {
+    if (m.messages[0].key.fromMe) return;
+    try {
+      const pushName = m.messages[0].pushName;
+      const numberUser = m.messages[0].key.participant || m.messages[0].key.remoteJid;
+      const message = m.messages[0].message;
+      const msg = m.messages[0];
+      const messageArr = m.messages[0];
+      const remoteJid = m.messages[0].key.remoteJid;
+      const isGroup = remoteJid.endsWith('@g.us');
+      const sessionKey = isGroup ? remoteJid : numberUser;
+
+      let chatMessage;
+
+      switch (true) {
+        case !!message.conversation:
+          chatMessage = message.conversation;
+          break;
+        case !!(message.extendedTextMessage && message.extendedTextMessage.text):
+          chatMessage = message.extendedTextMessage.text;
+          break;
+        case !!(message.imageMessage && message.imageMessage.caption):
+          chatMessage = message.imageMessage.caption;
+          break;
+        case !!(message.videoMessage && message.videoMessage.caption):
+          chatMessage = message.videoMessage.caption;
+          break;
+      }
+
+      if (!chatMessage) return;
+
+      const sessionID = remoteJid;
+
+      if (chatMessage.startsWith('/menu')) {
+        console.log(`Isi dari NumberUser: ${numberUser}\n\nIsi dari remoteJid: ${remoteJid}\n\nIsi dari pushName: ${pushName}\n\nIsi dari chatMessage: ${msg}`);
+        
+        const text = remoteJid.endsWith('@g.us')
+          ? `Halo *@${numberUser.replace(Array('@s.whatsapp.net', '@lid'), '')} (${pushName})*, menu saat ini adalah:
 /ai [Pesan] - Untuk chat dengan AI
 /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
 /list - Melihat semua list yang telah berada di auto reminder
@@ -119,18 +152,18 @@ async function connectToWhatsApp () {
 /tagall - Tag Semua orang ( Khusus Grup! )
 /kick - Untuk kick member di dalam grup
 /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
-/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt`,
-          mentions: [numberUser],
-        },
-        { quoted: m.messages[0] }
-      );
-    }
-
-    if (chatMessage.startsWith('/menu') && !remoteJid.endsWith('@g.us')) {
-      await sock.sendMessage(
-        remoteJid,
-        {
-          text: `Halo *${pushName}*, menu saat ini adalah:
+/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
+/asahotak - Untuk bermain asah otak
+/caklontong - Untuk bermain cak lontong
+/family100 - Untuk bermain family 100
+/siapakahaku - Untuk bermain siapakah aku
+/susunkata - Untuk bermain susun kata
+/tebakbendera - Untuk bermain tebak bendera
+/tebakbendera2 - Untuk bermain tebak bendera 2
+/tebakgambar - Untuk bermain tebak gambar
+/leaderboard - Untuk melihat leaderboard
+/exit - Untuk keluar dari mode tebak kata`
+          : `Halo *${pushName}*, menu saat ini adalah:
 /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
 /list - Melihat semua list yang telah berada di auto reminder
 /addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
@@ -139,165 +172,502 @@ async function connectToWhatsApp () {
 /tagall - Tag Semua orang ( Khusus Grup! )
 /kick - Untuk kick member di dalam grup
 /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
-/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt`,
-        },
-        { quoted: m.messages[0] }
-      );
-    }
-
-    // Handle perintah /jadwal
-    if (chatMessage.startsWith('/jadwal')) {
-      const jadwalKelas = await fetchData();
-      await sock.sendMessage(
-        remoteJid, // ID pengguna yang mengirim pesan
-        { text: jadwalKelas }, // Balasan yang dikirimkan oleh AI
-        { quoted: m.messages[0] } // Mengutip pesan pengguna
-      );
-    }
-
-    // untuk chat AI melalui chat pribadi
-    // memastikan pesan yang masuk bukan berasal dari grup, agar menghindari spam
-    // if (!remoteJid.endsWith('@g.us') && remoteJid != 'status@broadcast') {
-    //   // Jika bukan perintah /tagall, jalankan respon AI atau perintah lain
-    //   const jawabanAI = await responAI(chatMessage, sessionID);
-    //   await sock.sendPresenceUpdate('available', remoteJid);
-    //   await sock.sendMessage(
-    //     remoteJid, // ID pengguna yang mengirim pesan
-    //     { text: jawabanAI }, // Balasan yang dikirimkan oleh AI
-    //     { quoted: m.messages[0] } // Mengutip pesan pengguna
-    //   );
-    //   console.log(`Balasan AI yang berisi pesan "${chatMessage}" untuk ${remoteJid.replace('@s.whatsapp.net', '')} berhasil dikirim: ${jawabanAI}\n\n`);
-    //   // untuk chat dengan AI di grup dengan awalan /ai
-    // }
-    if (remoteJid.endsWith('@g.us') && chatMessage.startsWith('/ai')) {
-      // Menghapus "/ai " (perintah dan satu spasi setelahnya) dan mengambil sisa pesan
-      const messageUser = chatMessage.slice(4).trim(); // trim() untuk menghapus spasi tambahan di depan/akhir teks
-      console.log(messageUser);
-
-      const jawabanAI = await responAI(messageUser, sessionID);
-      await sock.sendPresenceUpdate('available', remoteJid);
-      await sock.sendMessage(
-        remoteJid, // ID pengguna yang mengirim pesan
-        { text: jawabanAI }, // Balasan yang dikirimkan oleh AI
-        { quoted: m.messages[0] } // Mengutip pesan pengguna
-      );
-      console.log(`Balasan AI yang berisi pesan "${messageUser}" untuk ${remoteJid.replace('@g.us', '')} berhasil dikirim: ${jawabanAI}\n\n`);
-    }
-
-    // Handle perintah /list
-    if (chatMessage.startsWith('/list')) {
-      const listJadwal = await listReminders(numberUser);
-      console.log(`remoteJID dari grup:` + numberUser);
-
-      await sock.sendMessage(remoteJid, { text: listJadwal }, { quoted: m.messages[0] });
-    }
-
-    if (chatMessage.startsWith('/new')) {
-      await createGroupWithFile(sock, messageArr, chatMessage, numberUser);
-    }
-
-    if (chatMessage.startsWith('/getAllMember')) {
-      // Mengambil semua anggota grup
-      const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
-      if (!groupJid) {
-        await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
-        return;
-      }
-      await getAllMember(sock, messageArr, groupJid); // Sertakan groupJid dalam pemanggilan fungsi
-      return;
-    }
-
-    // Handle perintah /add
-    if (chatMessage.startsWith('/add')) {
-      const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
-
-      if (!groupJid) {
-        await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
-        return;
+/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
+/asahotak - Untuk bermain asah otak
+/caklontong - Untuk bermain cak lontong
+/family100 - Untuk bermain family 100
+/siapakahaku - Untuk bermain siapakah aku
+/susunkata - Untuk bermain susun kata
+/tebakbendera - Untuk bermain tebak bendera
+/tebakbendera2 - Untuk bermain tebak bendera 2
+/tebakgambar - Untuk bermain tebak gambar
+/leaderboard - Untuk melihat leaderboard
+/exit - Untuk keluar dari mode tebak kata`;
+        await sock.sendMessage(remoteJid, { text, mentions: [numberUser] }, { quoted: m.messages[0] });
       }
 
-      await handleAddCommand(sock, m, groupJid); // Sertakan groupJid dalam pemanggilan fungsi
-      return;
-    }
-
-    // Handle perintah /kick
-    if (chatMessage.startsWith('/kick') || message.extendedTextMessage?.text == '/kick') {
-      // const numberKick = message.extendedTextMessage.contextInfo.participant;
-      // await sock.sendMessage(remoteJid, { text: `testing Kick dengan Nomor calon kick: ${numberKick}` });
-
-      const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
-      if (!groupJid) {
-        await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
+      if (chatMessage.startsWith('/jadwal')) {
+        const jadwalKelas = await fetchData();
+        await sock.sendMessage(remoteJid, { text: jadwalKelas }, { quoted: m.messages[0] });
       }
 
-      await handleKickCommand(sock, m, groupJid); // Sertakan groupJid dalam pemanggilan fungsi
-    }
-    
-    // Handle perintah /add
-    // Mengganti case '/add' dengan pengecekan startsWith
-    if (chatMessage.startsWith('/addList')) {
-      // Memecah pesan untuk mendapatkan parameter jadwal
-      const regex = /\/add\s+"([^"]+)"\s+(https:\/\/[^\s]+)\s+([0-9]{2}[.:][0-9]{2})\s+(.+)/;
-      const perintah = chatMessage.split(' ')[1];
-      const match = chatMessage.match(regex);
-
-      if (match) {
-        const courseName = match[1];
-        const zoomLink = match[2];
-        const reminderTime = match[3];
-        const days = match[4]; // Diterima dalam format bahasa Indonesia, misal "Senin"
-
-        try {
-          // Menambahkan jadwal ke database
-          await addReminder(courseName, zoomLink, reminderTime, days, numberUser);
-
-          await sock.sendMessage(remoteJid, {
-            text: `Jadwal berhasil ditambahkan:\nMata Kuliah: ${courseName}\nLink: ${zoomLink}\nJam: ${reminderTime}\nHari: ${days}`,
-            quoted: m.messages[0],
-          });
-        } catch (error) {
-          console.error('Error menambahkan jadwal:', error);
-          await sock.sendMessage(remoteJid, { text: 'Terjadi kesalahan saat menambahkan jadwal.' }, { quoted: m.messages[0] });
-        }
-      } else if (perintah === '/addList') {
-        await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /add "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
-      } else {
-        await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /add "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
-      }
-    }
-
-    // Jika pesan dimulai dengan "/delete"
-    if (chatMessage.startsWith('/delete')) {
-      const id = chatMessage.split(' ')[1]; // Mendapatkan ID dari perintah
-
-      if (!id) {
-        await sock.sendMessage(remoteJid, { text: 'Mohon sertakan ID jadwal yang ingin dihapus, misalnya: /delete 1' });
-        return;
+      if (remoteJid.endsWith('@g.us') && chatMessage.startsWith('/ai')) {
+        const messageUser = chatMessage.slice(4).trim();
+        const jawabanAI = await responAI(messageUser, sessionID);
+        await sock.sendMessage(remoteJid, { text: jawabanAI }, { quoted: m.messages[0] });
       }
 
-      try {
-        // Panggil fungsi untuk menghapus jadwal
-        const result = await deleteReminder(id, numberUser);
-
-        // Kirimkan respons setelah menghapus jadwal
-        await sock.sendMessage(remoteJid, { text: result });
-
-        // mengirimkan kembali semua list jadwal
+      if (chatMessage.startsWith('/list')) {
         const listJadwal = await listReminders(numberUser);
         await sock.sendMessage(remoteJid, { text: listJadwal }, { quoted: m.messages[0] });
-      } catch (error) {
-        console.error('Error deleting reminder:', error);
-        await sock.sendMessage(remoteJid, { text: 'Terjadi kesalahan saat menghapus jadwal. Coba lagi nanti.' });
       }
-    }
 
-    // Mengganti case '/tagall' dengan pengecekan startsWith
-    if (chatMessage.startsWith('/tagall')) {
-      await tagAll(sock, remoteJid, chatMessage);
+      if (chatMessage.startsWith('/new')) {
+        await createGroupWithFile(sock, messageArr, chatMessage, numberUser);
+      }
+
+      if (chatMessage.startsWith('/getAllMember')) {
+        const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
+        if (!groupJid) {
+          await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' }, { quoted: m.messages[0] });
+          return;
+        }
+        await getAllMember(sock, messageArr, groupJid);
+        return;
+      }
+
+      if (/^\/addList\b/.test(chatMessage)) {
+        const regex = /\/addList\s+"([^"]+)"\s+(https:\/\/[^\s]+)\s+([0-9]{2}[.:][0-9]{2})\s+(.+)/;
+        const match = chatMessage.match(regex);
+        if (match) {
+          const [_, courseName, zoomLink, reminderTime, days] = match;
+          await addReminder(courseName, zoomLink, reminderTime, days, numberUser);
+          await sock.sendMessage(remoteJid, {
+            text: `Jadwal berhasil ditambahkan:\nMata Kuliah: ${courseName}\nLink: ${zoomLink}\nJam: ${reminderTime}\nHari: ${days}`},
+            { quoted: m.messages[0] }
+          );
+        } else {
+          await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /addList "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
+        }
+      }
+
+      if (/^\/add\b/.test(chatMessage)) {
+        const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
+        if (!groupJid) {
+          await sock.sendMessage(remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' }, { quoted: m.messages[0] });
+          return;
+        }
+        await handleAddCommand(sock, m, groupJid);
+        return;
+      }
+
+      if (chatMessage.startsWith('/kick') || message.extendedTextMessage?.text === '/kick') {
+        const groupJid = remoteJid.endsWith('@g.us') ? remoteJid : null;
+        await handleKickCommand(sock, m, groupJid);
+      }
+
+      if (chatMessage.startsWith('/delete')) {
+        const id = chatMessage.split(' ')[1];
+        if (!id) {
+          await sock.sendMessage(remoteJid, { text: 'Mohon sertakan ID jadwal yang ingin dihapus.' }, { quoted: m.messages[0] });
+          return;
+        }
+        const result = await deleteReminder(id, numberUser);
+        await sock.sendMessage(remoteJid, { text: result });
+        const listJadwal = await listReminders(numberUser);
+        await sock.sendMessage(remoteJid, { text: listJadwal }, { quoted: m.messages[0] });
+      }
+
+      if (chatMessage.startsWith('/tagall')) {
+        await tagAll(sock, remoteJid, chatMessage);
+      }
+
+      // === HANDLE /exit ===
+      if (chatMessage === '/exit') {
+        if (gameSessions.has(sessionKey)) {
+          gameSessions.delete(sessionKey);
+          await sock.sendMessage(remoteJid, {
+            text: '🚪 Permainan telah dihentikan.' },
+            { quoted: msg }
+          );
+        } else {
+          await sock.sendMessage(remoteJid, {
+            text: '❌ Tidak ada permainan aktif saat ini.' },
+            { quoted: msg }
+          );
+        }
+        return;
+      }
+
+      if (chatMessage === '/skip') {
+        if (!gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ada game aktif untuk dilewati.' }, { quoted: msg });
+          return;
+        }
+
+        const session = gameSessions.get(sessionKey);
+        const nextSoal = gameHandlers[session.game].getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: session.game,
+          jawaban: nextSoal.jawaban.toLowerCase(),
+          soal: nextSoal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          text: '⏭️ Soal dilewati. Berikut soal selanjutnya:' },
+          { quoted: msg }
+        );
+
+        // Kirim soal baru sesuai jenisnya
+        if (nextSoal.soal && !nextSoal.img) {
+          await sock.sendMessage(remoteJid, {
+            text: `🧠 ${nextSoal.soal}` },
+            { quoted: msg }
+          );
+        } else if (session.game === 'tebakgambar' && nextSoal.img) {
+          await sock.sendMessage(remoteJid, {
+            image: { url: nextSoal.img },
+            caption: `🖼️ *Clue:*\n${nextSoal.deskripsi || 'Tidak ada'}` },
+            { quoted: msg }
+          );
+        } else if (nextSoal.img) {
+          await sock.sendMessage(remoteJid, {
+            image: { url: nextSoal.img },
+            caption: '🖼️ Soal Berikutnya!' } ,
+            { quoted: msg }
+          );
+        }
+
+        return;
+      }
+
+
+      if (gameSessions.has(sessionKey) && !chatMessage.startsWith('/')) {
+        const session = gameSessions.get(sessionKey);
+        const jawabanUser = chatMessage.toLowerCase();
+
+        // FAMILY100
+        if (session.game === 'family100') {
+          const isValid = gameHandlers.family100.isCorrectAnswer(session, chatMessage);
+          if (isValid) {
+            gameHandlers.family100.markAnswer(session, chatMessage);
+            await leaderboardDB.addScore(numberUser, pushName);
+
+            const sisa = session.jawaban.length - session.terjawab.length;
+
+            if (gameHandlers.family100.isComplete(session)) {
+              const next = gameHandlers.family100.getRandom();
+              gameSessions.set(sessionKey, {
+                game: 'family100',
+                soal: next.soal,
+                jawaban: next.jawaban,
+                terjawab: [],
+              });
+
+              await sock.sendMessage(remoteJid, {
+                text: `✅ Semua jawaban benar!` },
+                { quoted: msg }
+              );
+
+              await sock.sendMessage(remoteJid, {
+                text: `💯 *FAMILY 100*\n${next.soal}` },
+                { quoted: msg }
+              );
+            } else {
+              await sock.sendMessage(remoteJid, {
+                text: `✅ Benar! Masih ${sisa} jawaban lagi.` },
+                { quoted: msg }
+              );
+            }
+          } else {
+            await sock.sendMessage(remoteJid, {
+              text: `❌ Salah atau sudah dijawab.` },
+              { quoted: msg }
+            );
+          }
+          return;
+        }
+
+        // GAME BIASA
+        const jawabanBenar = session.jawaban.toLowerCase();
+        if (jawabanUser === jawabanBenar) {
+          await leaderboardDB.addScore(numberUser, pushName);
+
+          const nextSoal = gameHandlers[session.game].getRandom();
+          gameSessions.set(sessionKey, {
+            game: session.game,
+            jawaban: nextSoal.jawaban.toLowerCase(),
+            soal: nextSoal,
+          });
+
+          const deskripsi = session.soal?.deskripsi && ['caklontong', 'tebakgambar'].includes(session.game) ? `\n📝 *Penjelasan:* ${session.soal.deskripsi}` : '';
+
+          // 1. Kirim feedback jawaban benar dulu
+          await sock.sendMessage(remoteJid, {
+            text: `✅ Benar!${deskripsi}` },
+            { quoted: msg }
+          );
+
+          await new Promise(resolve => setTimeout(resolve, 800)); // Delay sebelum soal baru
+          
+          // 2. Kirim soal berikutnya (bentuk tergantung jenis game)
+          if (nextSoal.soal && !nextSoal.img) {
+            await sock.sendMessage(remoteJid, {
+              text: `🧠 *Soal Berikutnya:*\n${nextSoal.soal}` },
+              { quoted: msg }
+            );
+          } else if (session.game === 'tebakgambar' && nextSoal.img) {
+            await sock.sendMessage(remoteJid, {
+              image: { url: nextSoal.img },
+              caption: `🖼️ *Soal Berikutnya!*\n\n🧠 Clue: ${nextSoal.deskripsi || 'Tidak ada'}`,
+              quoted: msg
+            });
+          } else if (nextSoal.img) {
+            await sock.sendMessage(remoteJid, {
+              image: { url: nextSoal.img },
+              caption: `🖼️ *Soal Berikutnya!*`,
+              quoted: msg
+            });
+          }
+
+          return;
+        }
+
+        // Jawaban salah
+        await sock.sendMessage(remoteJid, {
+          text: `❌ Salah. Coba lagi atau ketik /exit untuk keluar.` },
+          { quoted: msg }
+        );
+
+        // Kirim ulang soal aktif
+        const game = session.game;
+        const soalAktif = session.soal;
+
+        if (soalAktif.soal && !soalAktif.img) {
+          // Soal berbentuk teks
+          await sock.sendMessage(remoteJid, {
+            text: `🔁 *Soal Ulang:*\n${soalAktif.soal}` } ,
+            {quoted: msg}
+          );
+        } else if (game === 'tebakgambar' && soalAktif.img) {
+          await new Promise((resolve) => setTimeout(resolve, 800)); // Delay 800ms
+          // Gambar dengan clue
+          await sock.sendMessage(remoteJid, {
+            image: { url: soalAktif.img },
+            caption: `🖼️ *Clue Ulang!*\n\n🧠 ${soalAktif.deskripsi || 'Tidak ada'}`,
+            quoted: msg,
+          });
+        } else if (soalAktif.img) {
+          // Gambar tanpa clue (misal tebakbendera)
+          await new Promise((resolve) => setTimeout(resolve, 800)); // Delay 800ms
+          await sock.sendMessage(remoteJid, {
+            image: { url: soalAktif.img },
+            caption: `🖼️ *Soal Ulang!*`,
+            quoted: msg,
+          });
+        }
+
+        return;
+      }
+
+
+      if (chatMessage === '/leaderboard') {
+        const topUsers = await leaderboardDB.getTopUsers();
+        let msg = '🏆 *Leaderboard Top 5:*\n';
+        topUsers.forEach((user, i) => {
+          msg += `${i + 1}. ${user.name} - ${user.score} poin\n`;
+        });
+        await sock.sendMessage(remoteJid, { text: msg}, { quoted: m.messages[0] });
+        return;
+      }
+
+      if (chatMessage === '/asahotak') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.' },
+            {quoted: msg}
+          );
+          return;
+        }
+        // Mulai permainan Asah Otak
+        const soal = gameHandlers.asahotak.getRandom();
+        gameSessions.set(sessionKey, {
+          game: 'asahotak',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+        await sock.sendMessage(remoteJid, {
+          text: `🧠 *ASAH OTAK*\n${soal.soal}`},
+          {quoted: msg}
+        );
+        return;
+      }
+
+      if (chatMessage === '/caklontong') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        // Mulai permainan Cak Lontong
+        const soal = gameHandlers.caklontong.getRandom();
+        gameSessions.set(sessionKey, {
+          game: 'caklontong',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+        await sock.sendMessage(remoteJid, {
+          text: `🤣 *CAK LONTONG*\n${soal.soal}`},
+          {quoted: msg}
+        );
+        return;
+      }
+
+      if (chatMessage === '/family100') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.' },
+            {quoted: msg}
+          );
+          return;
+        }
+        // Mulai permainan Family 100
+        const soal = gameHandlers.family100.getRandom();
+        gameSessions.set(sessionKey, {
+          game: 'family100',
+          soal: soal.soal,
+          jawaban: soal.jawaban,
+          terjawab: [],
+        });
+        await sock.sendMessage(remoteJid, {
+          text: `💯 *FAMILY 100*\n${soal.soal}\n\nTebak semua ${soal.jawaban.length} jawabannya!` },
+          { quoted: msg }
+        );
+        return;
+      }
+
+      if (chatMessage === '/siapakahaku') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+        // Mulai permainan Siapakah Aku
+        const soal = gameHandlers.siapakahaku.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'siapakahaku',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(
+          remoteJid,
+          {
+            text: `👤 *SIAPAKAH AKU*\n${soal.soal}`,
+          },
+          { quoted: msg }
+        );
+
+        return;
+      }
+
+      if (chatMessage === '/susunkata') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        // Mulai permainan Susun Kata
+        const soal = gameHandlers.susunkata.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'susunkata',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          text: `🔤 *SUSUN KATA*\n${soal.soal}\n*Kategori:* ${soal.tipe}`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+
+      if (chatMessage === '/tebakbendera') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakbendera.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakbendera',
+          jawaban: soal.name.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          image: { url: soal.img },
+          caption: `🚩 *TEBAK BENDERA*\nNegara apakah ini?`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+      
+      if (chatMessage === '/tebakbendera2') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakbendera2.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakbendera2',
+          jawaban: soal.name.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          image: { url: soal.img },
+          caption: `🚩 *TEBAK BENDERA*\nNegara apakah ini?`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+
+      if (chatMessage === '/tebakgambar') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakgambar.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakgambar',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          image: { url: soal.img },
+          caption: `🖼️ *TEBAK GAMBAR*\nApa yang ada di gambar ini?\n\nClue: ${soal.deskripsi}`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+      
+
+    } catch (error) {
+      console.error('Error handling incoming message:', error);
     }
-  } catch (error) { console.error('Error handling incoming message:', error);}
-    });
-    
+  });
 }
-// run in main file
-connectToWhatsApp()
+
+
+  connectToWhatsApp();
