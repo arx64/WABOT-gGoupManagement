@@ -109,7 +109,7 @@ async function connectToWhatsApp() {
     if (m.messages[0].key.fromMe) return;
     try {
       const pushName = m.messages[0].pushName;
-      const numberUser = m.messages[0].key.participant || m.messages[0].key.remoteJid;
+      const numberUser = m.messages[0].key.participant
       const message = m.messages[0].message;
       const msg = m.messages[0];
       const messageArr = m.messages[0];
@@ -142,7 +142,7 @@ async function connectToWhatsApp() {
         console.log(`Isi dari NumberUser: ${numberUser}\n\nIsi dari remoteJid: ${remoteJid}\n\nIsi dari pushName: ${pushName}\n\nIsi dari chatMessage: ${msg}`);
         
         const text = remoteJid.endsWith('@g.us')
-          ? `Halo *@${numberUser.replace(Array('@s.whatsapp.net', '@lid'), '')} (${pushName})*, menu saat ini adalah:
+          ? `Halo *@${numberUser.replace('@lid', '')} (${pushName})*, menu saat ini adalah:
 /ai [Pesan] - Untuk chat dengan AI
 /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
 /list - Melihat semua list yang telah berada di auto reminder
@@ -161,6 +161,8 @@ async function connectToWhatsApp() {
 /tebakbendera - Untuk bermain tebak bendera
 /tebakbendera2 - Untuk bermain tebak bendera 2
 /tebakgambar - Untuk bermain tebak gambar
+/tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
+/tebakkalimat - Untuk bermain tebak kalimat
 /leaderboard - Untuk melihat leaderboard
 /exit - Untuk keluar dari mode tebak kata`
           : `Halo *${pushName}*, menu saat ini adalah:
@@ -181,6 +183,8 @@ async function connectToWhatsApp() {
 /tebakbendera - Untuk bermain tebak bendera
 /tebakbendera2 - Untuk bermain tebak bendera 2
 /tebakgambar - Untuk bermain tebak gambar
+/tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
+/tebakkalimat - Untuk bermain tebak kalimat
 /leaderboard - Untuk melihat leaderboard
 /exit - Untuk keluar dari mode tebak kata`;
         await sock.sendMessage(remoteJid, { text, mentions: [numberUser] }, { quoted: m.messages[0] });
@@ -332,7 +336,8 @@ async function connectToWhatsApp() {
           const isValid = gameHandlers.family100.isCorrectAnswer(session, chatMessage);
           if (isValid) {
             gameHandlers.family100.markAnswer(session, chatMessage);
-            await leaderboardDB.addScore(numberUser, pushName);
+            await leaderboardDB.addScore(remoteJid, numberUser, pushName, 10);
+
 
             const sisa = session.jawaban.length - session.terjawab.length;
 
@@ -372,7 +377,7 @@ async function connectToWhatsApp() {
         // GAME BIASA
         const jawabanBenar = session.jawaban.toLowerCase();
         if (jawabanUser === jawabanBenar) {
-          await leaderboardDB.addScore(numberUser, pushName);
+          await leaderboardDB.addScore(remoteJid, numberUser, pushName, 10);
 
           const nextSoal = gameHandlers[session.game].getRandom();
           gameSessions.set(sessionKey, {
@@ -385,7 +390,7 @@ async function connectToWhatsApp() {
 
           // 1. Kirim feedback jawaban benar dulu
           await sock.sendMessage(remoteJid, {
-            text: `✅ Benar!${deskripsi}` },
+            text: `✅ Benar! Point +10\n\n${deskripsi}` },
             { quoted: msg }
           );
 
@@ -453,12 +458,20 @@ async function connectToWhatsApp() {
 
 
       if (chatMessage === '/leaderboard') {
-        const topUsers = await leaderboardDB.getTopUsers();
-        let msg = '🏆 *Leaderboard Top 5:*\n';
+        const topUsers = await leaderboardDB.getTopUsers(remoteJid);
+        if (topUsers.length === 0) {
+          await sock.sendMessage(remoteJid, {
+            text: '📊 Belum ada pemain di leaderboard untuk chat ini.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        let msgSend = '🏆 *Leaderboard Top 5:*\n';
         topUsers.forEach((user, i) => {
-          msg += `${i + 1}. ${user.name} - ${user.score} poin\n`;
+          msgSend += `${i + 1}. ${user.name} - ${user.score} poin\n`;
         });
-        await sock.sendMessage(remoteJid, { text: msg}, { quoted: m.messages[0] });
+        await sock.sendMessage(remoteJid, { text: msgSend}, { quoted: msg });
         return;
       }
 
@@ -656,6 +669,58 @@ async function connectToWhatsApp() {
         await sock.sendMessage(remoteJid, {
           image: { url: soal.img },
           caption: `🖼️ *TEBAK GAMBAR*\nApa yang ada di gambar ini?\n\nClue: ${soal.deskripsi}`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+
+      if (chatMessage ===  '/tebakkabupaten') {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakkabupaten.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakkabupaten',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          image: { url: soal.img },
+          caption: `🏙️ *TEBAK KABUPATEN*\nApa nama kabupaten ini?`},
+          {quoted: msg}
+        );
+
+        return;
+        
+      }
+
+      if (chatMessage.startsWith('/tebakkalimat')) {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakkalimat.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakkalimat',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          text: `✍️ *TEBAK KALIMAT*\n${soal.soal}`},
           {quoted: msg}
         );
 

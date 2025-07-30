@@ -1,8 +1,10 @@
 exports.up = function (knex) {
-  return knex.schema.createTable('leaderboard', function (table) {
-    table.string('userJid').primary(); // ID unik user (biasanya nomor WA)
-    table.string('name'); // Nama user
-    table.integer('score'); // Skor total
+  return knex.schema.createTable('leaderboard', (table) => {
+    table.string('chatId'); // bisa grup atau private chat
+    table.string('userJid'); // nomor WA
+    table.string('name'); // nama terakhir
+    table.integer('score');
+    table.primary(['chatId', 'userJid']);
   });
 };
 
