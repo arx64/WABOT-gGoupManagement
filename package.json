@@ -2,6 +2,7 @@
   "name": "zoom-reminder",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -11,11 +12,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "^7.0.0-rc.6",
     "axios": "^1.7.7",
     "better-sqlite3": "^11.3.0",
     "dayjs": "^1.11.13",
-    "jimp": "^0.16.13",
+    "jimp": "^1.6.0",
     "knex": "^3.1.0",
     "openai": "^4.64.0",
     "qrcode-terminal": "^0.12.0",

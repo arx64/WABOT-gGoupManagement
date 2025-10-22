@@ -3,7 +3,7 @@
 /**
  * @type { Object.<string, import("knex").Knex.Config> }
  */
-module.exports = {
+export default {
 
   development: {
     client: 'sqlite3',
@@ -47,7 +47,7 @@ module.exports = {
 };
 
 // knexfile.js
-module.exports = {
+export const leaderboardConfig = {
   development: {
     client: 'sqlite3',
     connection: {

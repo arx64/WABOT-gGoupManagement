@@ -1,9 +1,9 @@
-const axios = require('axios');
+import axios from 'axios';
 
 const headers = {
   accept: 'application/json, text/plain, */*',
   'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-  authorization: 'Bearer 1c4f782b136428dfd61d393db2e162c0e13ba10991f34203a1c77693734024b3e7fe881b4b36f155482ac5ac476aca1847051be66dedc5f5d424929ac56bcf724',
+  authorization: 'Bearer 1ab972e407f158dfd61d393db2e162c0e13ba10991f345a229e177fb7824bab7d7fe881b4b36f155482ac5ac476aca184732ccd95627b9b18aed55f3fc3e04d50',
   'cache-control': 'no-cache',
   dnt: '1',
   origin: 'https://edlink.id',
@@ -30,3 +30,5 @@ axios
   .catch((error) => {
     console.error(error);
   });
+
+export default {};

@@ -1,4 +1,5 @@
-const db = require('./db');
+import db from './db.js';
+
 const dayMap = {
   Senin: 'Mon',
   Selasa: 'Tue',
@@ -17,16 +18,15 @@ const convertDaysToEnglish = (days) => {
     .join(', ');
 };
 
-const addReminder = async (courseName, zoomLink, reminderTime, days, addedBy) => {
+export async function addReminder(courseName, zoomLink, reminderTime, days, addedBy) {
   const convertedDays = convertDaysToEnglish(days); // Ubah hari ke bahasa Inggris
   await db('reminders').insert({
     course_name: courseName,
     zoom_link: zoomLink,
     reminder_time: reminderTime,
     days: convertedDays,
-    added_by: addedBy
+    added_by: addedBy,
   });
   console.log('Jadwal berhasil ditambahkan!');
-};
+}
 
-module.exports = { addReminder };

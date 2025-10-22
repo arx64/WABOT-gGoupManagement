@@ -3,7 +3,7 @@ function normalizeJid(jid) {
   return jid.replace(/:\d+/, ''); // hapus :6, :1, dll
 }
 
-async function isAdmin(sock, participant, groupJid) {
+export async function isAdmin(sock, participant, groupJid) {
   try {
     const groupMembers = await sock.groupMetadata(groupJid);
 
@@ -23,7 +23,7 @@ async function isAdmin(sock, participant, groupJid) {
 
 
 // Fungsi utama untuk mengeluarkan anggota dari grup
-async function handleKickCommand(sock, m, groupJid) {
+export default async function handleKickCommand(sock, m, groupJid) {
   try {
     if (!groupJid) {
       await sock.sendMessage(m.messages[0].key.remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' }, { quoted: m.messages[0] });
@@ -87,5 +87,3 @@ async function handleKickCommand(sock, m, groupJid) {
     await sock.sendMessage(m.messages[0].key.remoteJid, { text: 'Terjadi kesalahan saat memproses perintah.' });
   }
 }
-// Export fungsi handleKickCommand
-module.exports = handleKickCommand;

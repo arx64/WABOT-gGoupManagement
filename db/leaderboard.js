@@ -1,5 +1,7 @@
 // db/leaderboard.js
-const knex = require('knex')({
+import knex from 'knex';
+
+const knexInstance = knex({
   client: 'sqlite3',
   connection: {
     filename: './leaderboard.db',
@@ -7,28 +9,24 @@ const knex = require('knex')({
   useNullAsDefault: true,
 });
 
-async function getScore(chatId, userJid) {
-  const row = await knex('leaderboard').where({ chatId, userJid }).first();
+export async function getScore(chatId, userJid) {
+  const row = await knexInstance('leaderboard').where({ userJid, chatId }).first();
   return row?.score || 0;
 }
 
-async function addScore(chatId, userJid, name, delta = 10) {
-  const existing = await knex('leaderboard').where({ chatId, userJid }).first();
+export async function addScore(chatId, userJid, name, delta = 10) {
+  const existing = await knexInstance('leaderboard').where({ userJid, chatId }).first();
   if (existing) {
-    await knex('leaderboard')
-      .where({ chatId, userJid })
-      .update({ score: existing.score + delta, name });
+    await knexInstance('leaderboard')
+      .where({ userJid, chatId })
+      .update({ score: existing.score + delta });
   } else {
-    await knex('leaderboard').insert({ chatId, userJid, name, score: delta });
+    await knexInstance('leaderboard').insert({ userJid, chatId, name, score: delta });
   }
 }
 
-async function getTopUsers(chatId, limit = 5) {
-  return await knex('leaderboard').where({ chatId }).orderBy('score', 'desc').limit(limit);
+export async function getTopUsers(chatId, limit = 5) {
+  return await knexInstance('leaderboard').where({ chatId }).orderBy('score', 'desc').limit(limit);
 }
 
-module.exports = {
-  getScore,
-  addScore,
-  getTopUsers,
-};
+export default knexInstance;

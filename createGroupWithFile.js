@@ -1,16 +1,20 @@
 // createGroupWithFile.js
-const { downloadMediaMessage } = require('@whiskeysockets/baileys');
-const fs = require('fs');
-const path = require('path');
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export async function createGroupWithFile(sock, message, groupNameRaw, senderJid) {
   // try {
   console.log(`isi dari message: `, JSON.stringify(message));
 
   // Validasi input
   if (!message || !message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.documentWithCaptionMessage?.message?.documentMessage || !message.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
     console.error('❌ Message tidak valid:', message);
-    await sock.sendMessage(senderJid, { text: '❗ Pastikan Anda membalas file .txt berisi nomor, lalu gunakan perintah:\n`/new "Nama Grup"`' }, { qouted: message});
+    await sock.sendMessage(senderJid, { text: '❗ Pastikan Anda membalas file .txt berisi nomor, lalu gunakan perintah:\n`/new "Nama Grup"`' }, { qouted: message });
     return;
   }
 
@@ -34,7 +38,7 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
     await sock.sendMessage(senderJid, { text: `❗ Pastikan Anda membalas file .txt berisi nomor.` }, { qouted: message });
     return;
   }
-  
+
   // if (!quoted || !quoted.documentMessage || !quoted.documentMessage.mimetype.includes('text/plain') || !quoted.documentWithCaptionMessage.message.documentMessage || !!quoted.documentWithCaptionMessage.message.documentMessage.mimetype.includes('text/plain')) {
   //   console.error('❌ Quoted message tidak valid:', quoted);
   //   await sock.sendMessage(senderJid, { text: `❗ Pastikan Anda membalas file .txt berisi nomor.\nError: ${qouted}` });
@@ -140,4 +144,3 @@ const createGroupWithFile = async (sock, message, groupNameRaw, senderJid) => {
   const link = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : 'Link undangan tidak tersedia.';
   await sock.sendMessage(senderJid, { text: `✅ Grup *${groupName}* berhasil dibuat!\nℹ️ *${groupResult.participants.length} Peserta* Berhasil Ditambahkan!\n📍 Link: ${link}` }, { qouted: message });
 };
-module.exports = { createGroupWithFile };

@@ -3,7 +3,7 @@ function normalizeJid(jid) {
   return jid.replace(/:\d+/, ''); // hapus :6, :1, dll
 }
 
-async function isAdmin(sock, participant, groupJid) {
+export async function isAdmin(sock, participant, groupJid) {
   try {
     const groupMembers = await sock.groupMetadata(groupJid);
 
@@ -23,8 +23,7 @@ async function isAdmin(sock, participant, groupJid) {
 
 
 // Fungsi utama untuk menambahkan anggota ke grup
-// Fungsi utama untuk menambahkan anggota ke grup
-async function handleAddCommand(sock, m, groupJid) {
+export default async function handleAddCommand(sock, m, groupJid) {
     try {
       if (!groupJid) {
         await sock.sendMessage(m.messages[0].key.remoteJid, { text: 'Perintah ini hanya bisa digunakan di grup.' });
@@ -91,6 +90,3 @@ async function handleAddCommand(sock, m, groupJid) {
       await sock.sendMessage(m.messages[0].key.remoteJid, { text: 'Terjadi kesalahan saat memproses perintah.' });
     }
   }
-  
-// Export fungsi handleAddCommand
-module.exports = handleAddCommand;

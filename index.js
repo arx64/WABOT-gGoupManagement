@@ -1,21 +1,22 @@
 
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const fetch = require('node-fetch');
-const readline = require('readline');
-const { responAI } = require('./gpt');
-const { fetchData } = require('./jadwalKelas');
-const { tagAll } = require('./tagAllFunc');
-const { addReminder } = require('./addReminder');
-const { deleteReminder } = require('./deleteReminder');
-const { listReminders } = require('./listReminder');
-const { createGroupWithFile } = require('./createGroupWithFile');
-const handleAddCommand = require('./addMember');
-const handleKickCommand = require('./kickMember');
-const { getAllMember } = require('./getAllMember');
-const leaderboardDB = require('./db/leaderboard');
-const gameHandlers = require('./games/gameHandlers');
-const WebSocket = require('ws');
-const { getRandomWord } = require('./gameWords');
+import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import fetch from 'node-fetch'; // atau gunakan globalThis.fetch di Node 18+
+import readline from 'readline';
+import qrcode from 'qrcode-terminal';
+import { responAI } from './gpt.js';
+import { fetchData } from './jadwalKelas.js';
+import { tagAll } from './tagAllFunc.js';
+import { addReminder } from './addReminder.js';
+import { deleteReminder } from './deleteReminder.js';
+import { listReminders } from './listReminder.js';
+import { createGroupWithFile } from './createGroupWithFile.js';
+import handleAddCommand from './addMember.js';
+import handleKickCommand from './kickMember.js';
+import { getAllMember } from './getAllMember.js';
+import leaderboardDB from './db/leaderboard.js';
+import gameHandlers from './games/gameHandlers.js';
+import WebSocket from 'ws';
+import { getRandomWord } from './gameWords.js';
 
 let sock;
 const activeGuess = new Map();      // userJid → { word }
@@ -23,14 +24,13 @@ const userScores = {};              // userJid → skor
 const gameSessions = new Map(); // userJid → { game, jawaban, soal }
 const gameScores = {};          // userJid → { name, score }
 
-let pairingRequested = false;
-let phoneNumber = '6281934179820';
+// persistent auth handled by useMultiFileAuthState; no manual pairing request
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
   sock = makeWASocket({
-    printQRInTerminal: false,
+    // printQRInTerminal removed (deprecated). Handle QR via connection.update event below.
     auth: state,
   });
 
@@ -42,64 +42,35 @@ async function connectToWhatsApp() {
   //   auth: state,
   // });
 
-  pairingRequested = false;
-
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
     console.log('📶 Status koneksi:', connection);
+    if (update.qr) {
+      console.log('🔳 QR code diterima — silakan scan dengan WhatsApp:');
+      try {
+        qrcode.generate(update.qr, { small: true });
+      } catch (e) {
+        console.log('QR (base64):', update.qr);
+      }
+    }
     if (lastDisconnect?.error) {
       console.error('🔴 Error:', lastDisconnect.error?.output?.payload?.message || lastDisconnect.error.message);
     }
-
-    if (!pairingRequested && connection === 'connecting') {
-      // jangan jalankan kalau sudah login
-      if (state?.creds?.registered) {
-        pairingRequested = true;
-        return;
-      }
-
-      pairingRequested = true;
-      setTimeout(async () => {
-        try {
-          const code = await sock.requestPairingCode(phoneNumber);
-          console.log('🔢 Pairing Code:', code);
-          console.log('📱 Buka WhatsApp > Perangkat Tertaut > Masukkan Kode');
-        } catch (err) {
-          console.error('❌ Gagal pairing:', err);
-        }
-      }, 2000);
-    }
-    
     if (connection === 'open') {
       console.log('✅ Terhubung ke WhatsApp!');
-      pairingRequested = true; // tidak perlu pairing lagi
     }
-
     if (connection === 'close') {
       const reason = lastDisconnect?.error?.output?.statusCode;
       console.log('❌ Koneksi tertutup. Alasan:', reason);
-
-        if (reason !== DisconnectReason.loggedOut) {
-          console.log('🔁 Mencoba reconnect dalam 5 detik...');
-          setTimeout(() => {
-            connectToWhatsApp(phoneNumber);
-          }, 5000);
-        } else {
-          console.log('🔒 Telah logout dari WhatsApp. Harap login ulang secara manual.');
-        }
-
-      if (reason === 515) {
-        console.log('🔁 Restart otomatis setelah pairing...');
-        pairingRequested = true;
-
-        // Tunggu 5 detik agar server WhatsApp siap menerima koneksi baru
+      if (reason !== DisconnectReason.loggedOut) {
+        console.log('🔁 Mencoba reconnect dalam 5 detik...');
         setTimeout(() => {
-          if (sock?.ws?.readyState === 1) sock.ws.close();
-          connectToWhatsApp(phoneNumber);
+          connectToWhatsApp();
         }, 5000);
+      } else {
+        console.log('🔒 Telah logout dari WhatsApp. Harap login ulang secara manual.');
       }
-      
     }
   });
 
@@ -114,6 +85,7 @@ async function connectToWhatsApp() {
       const msg = m.messages[0];
       const messageArr = m.messages[0];
       const remoteJid = m.messages[0].key.remoteJid;
+      const chatId = remoteJid.endsWith('@g.us') ? remoteJid : numberUser;
       const isGroup = remoteJid.endsWith('@g.us');
       const sessionKey = isGroup ? remoteJid : numberUser;
 
@@ -336,7 +308,7 @@ async function connectToWhatsApp() {
           const isValid = gameHandlers.family100.isCorrectAnswer(session, chatMessage);
           if (isValid) {
             gameHandlers.family100.markAnswer(session, chatMessage);
-            await leaderboardDB.addScore(remoteJid, numberUser, pushName, 10);
+            await leaderboardDB.addScore(chatId, numberUser, pushName);
 
 
             const sisa = session.jawaban.length - session.terjawab.length;
@@ -377,7 +349,7 @@ async function connectToWhatsApp() {
         // GAME BIASA
         const jawabanBenar = session.jawaban.toLowerCase();
         if (jawabanUser === jawabanBenar) {
-          await leaderboardDB.addScore(remoteJid, numberUser, pushName, 10);
+            await leaderboardDB.addScore(chatId, numberUser, pushName);
 
           const nextSoal = gameHandlers[session.game].getRandom();
           gameSessions.set(sessionKey, {
@@ -429,12 +401,18 @@ async function connectToWhatsApp() {
         const game = session.game;
         const soalAktif = session.soal;
 
-        if (soalAktif.soal && !soalAktif.img) {
-          // Soal berbentuk teks
+        if (game === 'tebakkimia' && soalAktif.soal) {
+          // Soal tebakkimia
           await sock.sendMessage(remoteJid, {
-            text: `🔁 *Soal Ulang:*\n${soalAktif.soal}` } ,
-            {quoted: msg}
-          );
+            text: `🔁 *Soal Ulang:*\nClue: Unsur dari ${soalAktif.soal} adalah?`,
+            quoted: msg,
+          });
+        } else if (soalAktif.soal && !soalAktif.img) {
+          // Soal berbentuk teks biasa
+          await sock.sendMessage(remoteJid, {
+            text: `🔁 *Soal Ulang:*\n${soalAktif.soal}`,
+            quoted: msg,
+          });
         } else if (game === 'tebakgambar' && soalAktif.img) {
           await new Promise((resolve) => setTimeout(resolve, 800)); // Delay 800ms
           // Gambar dengan clue
@@ -459,6 +437,13 @@ async function connectToWhatsApp() {
 
       if (chatMessage === '/leaderboard') {
         const topUsers = await leaderboardDB.getTopUsers(remoteJid);
+        async function getTopUsers(chatId, limit = 5) {
+  return await knex('leaderboard')
+    .where({ chatId })
+    .orderBy('score', 'desc')
+    .limit(limit);
+}
+
         if (topUsers.length === 0) {
           await sock.sendMessage(remoteJid, {
             text: '📊 Belum ada pemain di leaderboard untuk chat ini.'},
@@ -721,6 +706,56 @@ async function connectToWhatsApp() {
 
         await sock.sendMessage(remoteJid, {
           text: `✍️ *TEBAK KALIMAT*\n${soal.soal}`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+      
+      if (chatMessage.startsWith('/tebakkata')) {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakkata.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakkata',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          text: `✍️ *TEBAK KATA*\nClue: ${soal.soal}`},
+          {quoted: msg}
+        );
+
+        return;
+      }
+
+      if (chatMessage.startsWith('/tebakkimia')) {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, {
+            text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'},
+            {quoted: msg}
+          );
+          return;
+        }
+
+        const soal = gameHandlers.tebakkimia.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebakkimia',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, {
+          text: `✍️ *TEBAK KIMIA*\nClue: Unsur dari ${soal.soal} adalah?`},
           {quoted: msg}
         );
 

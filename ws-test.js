@@ -1,4 +1,4 @@
-const WebSocket = require('ws');
+import WebSocket from 'ws';
 
 const ws = new WebSocket('wss://web.whatsapp.com/ws/chat');
 

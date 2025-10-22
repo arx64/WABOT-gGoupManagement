@@ -1,7 +1,11 @@
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-const getAllMember = async (sock, message, senderJid) => {
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export async function getAllMember(sock, message, senderJid) {
   try {
     // Ambil JID grup dari pesan
     const groupJid = message.key.remoteJid;
@@ -21,7 +25,7 @@ const getAllMember = async (sock, message, senderJid) => {
     }
 
     // Ambil semua nomor (tanpa @s.whatsapp.net)
-    const numbers = members.map(m => m.id.replace('@s.whatsapp.net', ''));
+    const numbers = members.map(m => m.phoneNumber.replace('@s.whatsapp.net', ''));
 
     // Simpan ke file txt
     const filePath = path.join(__dirname, 'all_members.txt');
@@ -41,5 +45,3 @@ const getAllMember = async (sock, message, senderJid) => {
     await sock.sendMessage(senderJid, { text: 'Terjadi kesalahan saat mengambil anggota grup.' });
   }
 };
-
-module.exports = { getAllMember };

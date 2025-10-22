@@ -2,12 +2,14 @@
 
 // LIST MODEL: brainxiex, miaw, cecep, gpt
 
-const OpenAI = require('openai');
+import OpenAI from 'openai';
+
 const client = new OpenAI({
   apiKey: 'BarqahGantengBangetGilaGantengnyaBikinTergilaGilaBangetSumpah',
   baseURL: 'https://xiex.my.id/api/ai',
 });
-const responAI = async (chatMessage, sessID) => {
+
+export const responAI = async (chatMessage, sessID) => {
   try {
     const stream = await client.chat.completions.create({
       // LIST MODEL: brainxiex, miaw, cecep, gpt
@@ -26,6 +28,3 @@ const responAI = async (chatMessage, sessID) => {
     throw new Error('Gagal mendapatkan respons dari AI');
   }
 };
-
-// Melakukan export dari fungsi responAI agar bisa digunakan di file lain
-module.exports = { responAI };

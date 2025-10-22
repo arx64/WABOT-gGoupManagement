@@ -1,6 +1,6 @@
-const db = require('./db');
+import db from './db.js';
 
-const listReminders = async (numberUser) => {
+export const listReminders = async (numberUser) => {
   // Mengambil semua data dari tabel `reminders`
   const reminders = await db('reminders').select('*').where('added_by', '=', numberUser);
 
@@ -39,4 +39,4 @@ const listReminders = async (numberUser) => {
   return message;
 };
 
-module.exports = { listReminders };
+export default listReminders;

@@ -1,10 +1,14 @@
 // games/family100.js
-const fs = require('fs');
-const path = require('path');
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const data = JSON.parse(fs.readFileSync(path.join(__dirname, '../database/family100.json')));
 
-function getRandom() {
+export function getRandom() {
   const randomIndex = Math.floor(Math.random() * data.length);
   const item = data[randomIndex];
   return {
@@ -14,22 +18,15 @@ function getRandom() {
   };
 }
 
-function isCorrectAnswer(session, userAnswer) {
+export function isCorrectAnswer(session, userAnswer) {
   const normalized = userAnswer.toLowerCase();
   return session.jawaban.includes(normalized) && !session.terjawab.includes(normalized);
 }
 
-function markAnswer(session, answer) {
+export function markAnswer(session, answer) {
   session.terjawab.push(answer.toLowerCase());
 }
 
-function isComplete(session) {
+export function isComplete(session) {
   return session.jawaban.length === session.terjawab.length;
 }
-
-module.exports = {
-  getRandom,
-  isCorrectAnswer,
-  markAnswer,
-  isComplete,
-};

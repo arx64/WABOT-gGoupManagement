@@ -1,4 +1,6 @@
-const knex = require('knex')({
+import knex from 'knex';
+
+const knexInstance = knex({
   client: 'sqlite3',
   connection: {
     filename: './leaderboard.db',
@@ -6,15 +8,21 @@ const knex = require('knex')({
   useNullAsDefault: true,
 });
 
-async function resetLeaderboard() {
-  try {
-    await knex('leaderboard').truncate();
-    console.log('✅ Semua data leaderboard berhasil dihapus.');
-  } catch (err) {
-    console.error('❌ Gagal hapus leaderboard:', err.message);
-  } finally {
-    knex.destroy();
-  }
+export async function resetLeaderboardTable() {
+  await knexInstance.schema.dropTableIfExists('leaderboard');
+
+  await knexInstance.schema.createTable('leaderboard', (table) => {
+    table.string('userJid');
+    table.string('chatId');
+    table.string('name');
+    table.integer('score').defaultTo(0);
+    table.primary(['userJid', 'chatId']); // ✅ ini membuat kombinasi unik
+  });
+
+  console.log('✅ Tabel leaderboard berhasil dibuat ulang!');
 }
 
-resetLeaderboard();
+// Run if executed directly
+if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+  resetLeaderboardTable();
+}

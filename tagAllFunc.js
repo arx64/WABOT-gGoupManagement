@@ -1,5 +1,5 @@
 // Fungsi untuk tag all
-const tagAll = async (sock, remoteJid, chatMessage) => {
+export async function tagAll(sock, remoteJid, chatMessage) {
   try {
     // Mengambil metadata grup untuk mendapatkan daftar peserta
     const groupMetadata = await sock.groupMetadata(remoteJid);
@@ -18,7 +18,6 @@ const tagAll = async (sock, remoteJid, chatMessage) => {
   } catch (error) {
     console.error('Error saat tag all:', error);
   }
-};
+}
 
-// Ekspor fungsi tagAll
-module.exports = { tagAll };
+export default tagAll;
