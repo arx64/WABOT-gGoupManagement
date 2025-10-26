@@ -13,10 +13,11 @@ import { createGroupWithFile } from './createGroupWithFile.js';
 import handleAddCommand from './addMember.js';
 import handleKickCommand from './kickMember.js';
 import { getAllMember } from './getAllMember.js';
-import leaderboardDB from './db/leaderboard.js';
+import { addScore, getTopUsers } from './db/leaderboard.js';
 import gameHandlers from './games/gameHandlers.js';
 import WebSocket from 'ws';
 import { getRandomWord } from './gameWords.js';
+import { createNote, getNoteById, listNotes, deleteNote } from './notes.js';
 
 let sock;
 const activeGuess = new Map();      // userJid → { word }
@@ -79,8 +80,9 @@ async function connectToWhatsApp() {
   sock.ev.on('messages.upsert', async (m) => {
     if (m.messages[0].key.fromMe) return;
     try {
-      const pushName = m.messages[0].pushName;
-      const numberUser = m.messages[0].key.participant
+  const pushName = m.messages[0].pushName;
+  // For group messages, key.participant contains the sender; for private chats use remoteJid
+  const numberUser = m.messages[0].key.participant ?? m.messages[0].key.remoteJid;
       const message = m.messages[0].message;
       const msg = m.messages[0];
       const messageArr = m.messages[0];
@@ -115,7 +117,7 @@ async function connectToWhatsApp() {
         
         const text = remoteJid.endsWith('@g.us')
           ? `Halo *@${numberUser.replace('@lid', '')} (${pushName})*, menu saat ini adalah:
-/ai [Pesan] - Untuk chat dengan AI
+/ai [Pesan] - Untuk  chat dengan AI
 /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
 /list - Melihat semua list yang telah berada di auto reminder
 /addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
@@ -159,7 +161,11 @@ async function connectToWhatsApp() {
 /tebakkalimat - Untuk bermain tebak kalimat
 /leaderboard - Untuk melihat leaderboard
 /exit - Untuk keluar dari mode tebak kata`;
-        await sock.sendMessage(remoteJid, { text, mentions: [numberUser] }, { quoted: m.messages[0] });
+        // Only add mentions when in a group chat (participant present). In private chats
+        // `numberUser` equals `remoteJid` and we shouldn't include mentions.
+        const payload = { text };
+        if (remoteJid.endsWith('@g.us')) payload.mentions = [numberUser];
+        await sock.sendMessage(remoteJid, payload, { quoted: m.messages[0] });
       }
 
       if (chatMessage.startsWith('/jadwal')) {
@@ -205,6 +211,57 @@ async function connectToWhatsApp() {
         } else {
           await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /addList "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
         }
+      }
+
+      // === /notes command ===
+      if (chatMessage.startsWith('/notes')) {
+        const args = chatMessage.slice(6).trim(); // remove '/notes'
+
+        // /notes show -> list notes
+        if (args === 'show') {
+          const rows = await listNotes();
+          if (!rows.length) {
+            await sock.sendMessage(remoteJid, { text: 'Belum ada notes.' }, { quoted: m.messages[0] });
+            return;
+          }
+          const summary = rows.map(r => `ID: ${r.id} — ${r.author} — ${r.created_at}\n\n${r.content.slice(0, 200)}${r.content.length>200? '...':''}`).join('\n\n');
+          await sock.sendMessage(remoteJid, { text: `Daftar notes:\n\n${summary}` }, { quoted: m.messages[0] });
+          return;
+        }
+
+        // /notes delete <id>
+        if (args.startsWith('delete ')) {
+          const id = parseInt(args.split(' ')[1], 10);
+          if (Number.isNaN(id)) {
+            await sock.sendMessage(remoteJid, { text: 'ID tidak valid.' }, { quoted: m.messages[0] });
+            return;
+          }
+          const ok = await deleteNote(id);
+          await sock.sendMessage(remoteJid, { text: ok ? `Note ${id} dihapus.` : `Note ${id} tidak ditemukan.` }, { quoted: m.messages[0] });
+          return;
+        }
+
+        // /notes <id> -> show note
+        if (/^\d+$/.test(args)) {
+          const id = parseInt(args, 10);
+          const row = await getNoteById(id);
+          if (!row) {
+            await sock.sendMessage(remoteJid, { text: `Note dengan ID ${id} tidak ditemukan.` }, { quoted: m.messages[0] });
+            return;
+          }
+          await sock.sendMessage(remoteJid, { text: `ID: ${row.id}\nAuthor: ${row.author}\nCreated: ${row.created_at}\n\n${row.content}` }, { quoted: m.messages[0] });
+          return;
+        }
+
+        // Otherwise create a new note with the args as content
+        if (args.length > 0) {
+          const id = await createNote(numberUser, args);
+          await sock.sendMessage(remoteJid, { text: `Note disimpan dengan ID ${id}.` }, { quoted: m.messages[0] });
+          return;
+        }
+
+        // fallback: show help for notes
+        await sock.sendMessage(remoteJid, { text: 'Format /notes:\n/notes <teks> — buat note\n/notes <id> — lihat note\n/notes show — list semua note\n/notes delete <id> — hapus note' }, { quoted: m.messages[0] });
       }
 
       if (/^\/add\b/.test(chatMessage)) {
@@ -308,7 +365,7 @@ async function connectToWhatsApp() {
           const isValid = gameHandlers.family100.isCorrectAnswer(session, chatMessage);
           if (isValid) {
             gameHandlers.family100.markAnswer(session, chatMessage);
-            await leaderboardDB.addScore(chatId, numberUser, pushName);
+            await addScore(chatId, numberUser, pushName);
 
 
             const sisa = session.jawaban.length - session.terjawab.length;
@@ -349,7 +406,7 @@ async function connectToWhatsApp() {
         // GAME BIASA
         const jawabanBenar = session.jawaban.toLowerCase();
         if (jawabanUser === jawabanBenar) {
-            await leaderboardDB.addScore(chatId, numberUser, pushName);
+            await addScore(chatId, numberUser, pushName);
 
           const nextSoal = gameHandlers[session.game].getRandom();
           gameSessions.set(sessionKey, {
@@ -436,14 +493,9 @@ async function connectToWhatsApp() {
 
 
       if (chatMessage === '/leaderboard') {
-        const topUsers = await leaderboardDB.getTopUsers(remoteJid);
-        async function getTopUsers(chatId, limit = 5) {
-  return await knex('leaderboard')
-    .where({ chatId })
-    .orderBy('score', 'desc')
-    .limit(limit);
-}
-
+        const topUsers = await getTopUsers(remoteJid);
+        console.log(`Top USers: ${topUsers}`);
+        
         if (topUsers.length === 0) {
           await sock.sendMessage(remoteJid, {
             text: '📊 Belum ada pemain di leaderboard untuk chat ini.'},
