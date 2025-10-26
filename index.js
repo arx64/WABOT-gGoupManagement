@@ -1,7 +1,5 @@
 
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
-import fetch from 'node-fetch'; // atau gunakan globalThis.fetch di Node 18+
-import readline from 'readline';
 import qrcode from 'qrcode-terminal';
 import { responAI } from './gpt.js';
 import { fetchData } from './jadwalKelas.js';
@@ -15,9 +13,8 @@ import handleKickCommand from './kickMember.js';
 import { getAllMember } from './getAllMember.js';
 import { addScore, getTopUsers } from './db/leaderboard.js';
 import gameHandlers from './games/gameHandlers.js';
-import WebSocket from 'ws';
-import { getRandomWord } from './gameWords.js';
 import { createNote, getNoteById, listNotes, deleteNote } from './notes.js';
+import { startScheduler, stopScheduler } from './scheduler.js';
 
 let sock;
 const activeGuess = new Map();      // userJid → { word }
@@ -60,6 +57,12 @@ async function connectToWhatsApp() {
     }
     if (connection === 'open') {
       console.log('✅ Terhubung ke WhatsApp!');
+      // start scheduler when connection opens
+      try {
+        startScheduler(sock).catch(err => console.error('startScheduler failed:', err));
+      } catch (e) {
+        console.error('Failed to start scheduler:', e);
+      }
     }
     if (connection === 'close') {
       const reason = lastDisconnect?.error?.output?.statusCode;
@@ -69,6 +72,8 @@ async function connectToWhatsApp() {
         setTimeout(() => {
           connectToWhatsApp();
         }, 5000);
+        // stop scheduler while disconnected
+        try { stopScheduler(); } catch (e) { /* ignore */ }
       } else {
         console.log('🔒 Telah logout dari WhatsApp. Harap login ulang secara manual.');
       }
@@ -137,6 +142,11 @@ async function connectToWhatsApp() {
 /tebakgambar - Untuk bermain tebak gambar
 /tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
 /tebakkalimat - Untuk bermain tebak kalimat
+/tebakkata - Untuk bermain tebak kata
+/tebakkimia - Untuk bermain tebak kimia
+/tebaklirik - Untuk bermain tebak lirik
+/tebaktebakan - Untuk bermain tebak tebakan
+/tekateki - Untuk bermain teka-teki
 /leaderboard - Untuk melihat leaderboard
 /exit - Untuk keluar dari mode tebak kata`
           : `Halo *${pushName}*, menu saat ini adalah:
@@ -159,6 +169,11 @@ async function connectToWhatsApp() {
 /tebakgambar - Untuk bermain tebak gambar
 /tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
 /tebakkalimat - Untuk bermain tebak kalimat
+/tebakkata - Untuk bermain tebak kata
+/tebakkimia - Untuk bermain tebak kimia
+/tebaklirik - Untuk bermain tebak lirik
+/tebaktebakan - Untuk bermain tebak tebakan
+/tekateki - Untuk bermain teka-teki
 /leaderboard - Untuk melihat leaderboard
 /exit - Untuk keluar dari mode tebak kata`;
         // Only add mentions when in a group chat (participant present). In private chats
@@ -811,6 +826,63 @@ async function connectToWhatsApp() {
           {quoted: msg}
         );
 
+        return;
+      }
+      
+      if (chatMessage.startsWith('/tebaklirik')) {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'}, { quoted: msg });
+          return;
+        }
+
+        const soal = gameHandlers.tebaklirik.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebaklirik',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, { text: `🎵 *TEBAK LIRIK*
+${soal.soal}` }, { quoted: msg });
+        return;
+      }
+
+      if (chatMessage.startsWith('/tebaktebakan')) {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'}, { quoted: msg });
+          return;
+        }
+
+        const soal = gameHandlers.tebaktebakan.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tebaktebakan',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, { text: `🧩 *TEBAK-TEBAKAN*
+${soal.soal}` }, { quoted: msg });
+        return;
+      }
+
+      if (chatMessage.startsWith('/tekateki')) {
+        if (gameSessions.has(sessionKey)) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.'}, { quoted: msg });
+          return;
+        }
+
+        const soal = gameHandlers.tekateki.getRandom();
+
+        gameSessions.set(sessionKey, {
+          game: 'tekateki',
+          jawaban: soal.jawaban.toLowerCase(),
+          soal,
+        });
+
+        await sock.sendMessage(remoteJid, { text: `❓ *TEKA-TEKI*
+${soal.soal}` }, { quoted: msg });
         return;
       }
       
