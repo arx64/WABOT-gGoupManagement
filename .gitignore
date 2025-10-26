@@ -1,3 +1,5 @@
 # Baileys auth (do not commit)
 auth_info_baileys/
 node_modules/
+logs/
+migrations/
