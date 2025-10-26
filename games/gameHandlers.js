@@ -10,6 +10,9 @@ import * as tebakkabupaten from './tebakkabupaten.js';
 import * as tebakkalimat from './tebakkalimat.js';
 import * as tebakkata from './tebakkata.js';
 import * as tebakkimia from './tebakkimia.js';
+import * as tebaklirik from './tebaklirik.js';
+import * as tebaktebakan from './tebaktebakan.js';
+import * as tekateki from './tekateki.js';
 // import tambahan jika ada...
 
 export default {
@@ -25,4 +28,7 @@ export default {
   tebakkalimat,
   tebakkata,
   tebakkimia,
+  tebaklirik,
+  tebaktebakan,
+  tekateki,
 };
