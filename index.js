@@ -1,4 +1,5 @@
 
+import 'dotenv/config';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import { responAI } from './gpt.js';
@@ -15,6 +16,7 @@ import { addScore, getTopUsers } from './db/leaderboard.js';
 import gameHandlers from './games/gameHandlers.js';
 import { createNote, getNoteById, listNotes, deleteNote } from './notes.js';
 import { startScheduler, stopScheduler } from './scheduler.js';
+import { startEdlinkScheduler, stopEdlinkScheduler, fetchOpenAssignments } from './edlinkScheduler.js';
 
 let sock;
 const activeGuess = new Map();      // userJid → { word }
@@ -28,17 +30,9 @@ async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
   sock = makeWASocket({
-    // printQRInTerminal removed (deprecated). Handle QR via connection.update event below.
     auth: state,
   });
 
-  // sock = makeWASocket({
-  //   version: {
-  //     version: [2, 3000, 1023223821],
-  //   },
-  //   printQRInTerminal: false,
-  //   auth: state,
-  // });
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
@@ -60,6 +54,8 @@ async function connectToWhatsApp() {
       // start scheduler when connection opens
       try {
         startScheduler(sock).catch(err => console.error('startScheduler failed:', err));
+        // start edlink scheduler if configured (EDLINK_BEARER and EDLINK_NOTIFY_JID)
+        startEdlinkScheduler(sock).catch(err => console.error('startEdlinkScheduler failed:', err));
       } catch (e) {
         console.error('Failed to start scheduler:', e);
       }
@@ -74,6 +70,7 @@ async function connectToWhatsApp() {
         }, 5000);
         // stop scheduler while disconnected
         try { stopScheduler(); } catch (e) { /* ignore */ }
+        try { stopEdlinkScheduler(); } catch (e) { /* ignore */ }
       } else {
         console.log('🔒 Telah logout dari WhatsApp. Harap login ulang secara manual.');
       }
@@ -120,62 +117,66 @@ async function connectToWhatsApp() {
       if (chatMessage.startsWith('/menu')) {
         console.log(`Isi dari NumberUser: ${numberUser}\n\nIsi dari remoteJid: ${remoteJid}\n\nIsi dari pushName: ${pushName}\n\nIsi dari chatMessage: ${msg}`);
         
-        const text = remoteJid.endsWith('@g.us')
-          ? `Halo *@${numberUser.replace('@lid', '')} (${pushName})*, menu saat ini adalah:
-/ai [Pesan] - Untuk  chat dengan AI
-/jadwal - Melihat Jadwal Mingguan yang berada di EdLink
-/list - Melihat semua list yang telah berada di auto reminder
-/addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
-/delete - Untuk menghapus reminder
-/add - Untuk add member di dalam grup
-/tagall - Tag Semua orang ( Khusus Grup! )
-/kick - Untuk kick member di dalam grup
-/new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
-/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
-/asahotak - Untuk bermain asah otak
-/caklontong - Untuk bermain cak lontong
-/family100 - Untuk bermain family 100
-/siapakahaku - Untuk bermain siapakah aku
-/susunkata - Untuk bermain susun kata
-/tebakbendera - Untuk bermain tebak bendera
-/tebakbendera2 - Untuk bermain tebak bendera 2
-/tebakgambar - Untuk bermain tebak gambar
-/tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
-/tebakkalimat - Untuk bermain tebak kalimat
-/tebakkata - Untuk bermain tebak kata
-/tebakkimia - Untuk bermain tebak kimia
-/tebaklirik - Untuk bermain tebak lirik
-/tebaktebakan - Untuk bermain tebak tebakan
-/tekateki - Untuk bermain teka-teki
-/leaderboard - Untuk melihat leaderboard
-/exit - Untuk keluar dari mode tebak kata`
-          : `Halo *${pushName}*, menu saat ini adalah:
-/jadwal - Melihat Jadwal Mingguan yang berada di EdLink
-/list - Melihat semua list yang telah berada di auto reminder
-/addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
-/delete - Untuk menghapus reminder
-/add - Untuk add member di dalam grup
-/tagall - Tag Semua orang ( Khusus Grup! )
-/kick - Untuk kick member di dalam grup
-/new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
-/getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
-/asahotak - Untuk bermain asah otak
-/caklontong - Untuk bermain cak lontong
-/family100 - Untuk bermain family 100
-/siapakahaku - Untuk bermain siapakah aku
-/susunkata - Untuk bermain susun kata
-/tebakbendera - Untuk bermain tebak bendera
-/tebakbendera2 - Untuk bermain tebak bendera 2
-/tebakgambar - Untuk bermain tebak gambar
-/tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
-/tebakkalimat - Untuk bermain tebak kalimat
-/tebakkata - Untuk bermain tebak kata
-/tebakkimia - Untuk bermain tebak kimia
-/tebaklirik - Untuk bermain tebak lirik
-/tebaktebakan - Untuk bermain tebak tebakan
-/tekateki - Untuk bermain teka-teki
-/leaderboard - Untuk melihat leaderboard
-/exit - Untuk keluar dari mode tebak kata`;
+   const groupMenu = `Halo *@${numberUser.replace('@lid', '')} (${pushName})*, menu saat ini adalah:
+ /ai [Pesan] - Untuk  chat dengan AI
+ /tugas - Cek tugas/quiz terbuka dari EdLink
+ /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
+ /list - Melihat semua list yang telah berada di auto reminder
+ /addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
+ /delete - Untuk menghapus reminder
+ /add - Untuk add member di dalam grup
+ /tagall - Tag Semua orang ( Khusus Grup! )
+ /kick - Untuk kick member di dalam grup
+ /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
+ /getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
+ /asahotak - Untuk bermain asah otak
+ /caklontong - Untuk bermain cak lontong
+ /family100 - Untuk bermain family 100
+ /siapakahaku - Untuk bermain siapa aku
+ /susunkata - Untuk bermain susun kata
+ /tebakbendera - Untuk bermain tebak bendera
+ /tebakbendera2 - Untuk bermain tebak bendera 2
+ /tebakgambar - Untuk bermain tebak gambar
+ /tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
+ /tebakkalimat - Untuk bermain tebak kalimat
+ /tebakkata - Untuk bermain tebak kata
+ /tebakkimia - Untuk bermain tebak kimia
+ /tebaklirik - Untuk bermain tebak lirik
+ /tebaktebakan - Untuk bermain tebak tebakan
+ /tekateki - Untuk bermain teka-teki
+ /leaderboard - Untuk melihat leaderboard
+ /exit - Untuk keluar dari mode tebak kata`;
+
+   const privateMenu = `Halo *${pushName}*, menu saat ini adalah:
+ /tugas - Cek tugas/quiz terbuka dari EdLink
+ /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
+ /list - Melihat semua list yang telah berada di auto reminder
+ /addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
+ /delete - Untuk menghapus reminder
+ /add - Untuk add member di dalam grup
+ /tagall - Tag Semua orang ( Khusus Grup! )
+ /kick - Untuk kick member di dalam grup
+ /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
+ /getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
+ /asahotak - Untuk bermain asah otak
+ /caklontong - Untuk bermain cak lontong
+ /family100 - Untuk bermain family 100
+ /siapakahaku - Untuk bermain siapa aku
+ /susunkata - Untuk bermain susun kata
+ /tebakbendera - Untuk bermain tebak bendera
+ /tebakbendera2 - Untuk bermain tebak bendera 2
+ /tebakgambar - Untuk bermain tebak gambar
+ /tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
+ /tebakkalimat - Untuk bermain tebak kalimat
+ /tebakkata - Untuk bermain tebak kata
+ /tebakkimia - Untuk bermain tebak kimia
+ /tebaklirik - Untuk bermain tebak lirik
+ /tebaktebakan - Untuk bermain tebak tebakan
+ /tekateki - Untuk bermain teka-teki
+ /leaderboard - Untuk melihat leaderboard
+ /exit - Untuk keluar dari mode tebak kata`;
+
+   const text = remoteJid.endsWith('@g.us') ? groupMenu : privateMenu;
         // Only add mentions when in a group chat (participant present). In private chats
         // `numberUser` equals `remoteJid` and we shouldn't include mentions.
         const payload = { text };
@@ -188,9 +189,51 @@ async function connectToWhatsApp() {
         await sock.sendMessage(remoteJid, { text: jadwalKelas }, { quoted: m.messages[0] });
       }
 
+      if (chatMessage.startsWith('/tugas')) {
+        try {
+          const bearer = process.env.EDLINK_BEARER;
+          const items = await fetchOpenAssignments({ bearer });
+          if (!items || items.length === 0) {
+            await sock.sendMessage(remoteJid, { text: '✅ Tidak ada tugas/quiz terbuka saat ini.' }, { quoted: m.messages[0] });
+            return;
+          }
+
+          // helper to parse various timestamp formats
+          const parseMaybeDate = (v) => {
+            if (!v) return null;
+            if (typeof v === 'number') {
+              if (v < 1e12) v = v * 1000; // seconds -> ms
+              return new Date(v);
+            }
+            const p = Date.parse(v);
+            if (isNaN(p)) return null;
+            return new Date(p);
+          };
+
+          const lines = items.map(it => {
+            const due = parseMaybeDate(it.dueAt || it.publishedAtTimestamp || it.section?.endedAtTimestamp);
+            const dueStr = due ? due.toLocaleString('id-ID') : '—';
+            // console.log(it.group);
+            const className = it.group?.className || '';
+            const kelas = it.group?.name || it.group?.className || '';
+            const link = (it.group?.description && (it.group.description.match(/https?:\/\/(\S+)/) || [])[0]) || '';
+            return `• ${it.title || 'Tugas/Quiz'}\nKelas: ${kelas} (${className})\nWaktu: ${dueStr}\n${link}`;
+          });
+
+          const out = `📚 *Daftar Tugas / Quiz Terbuka:*
+\n${lines.join('\n\n')}`;
+          await sock.sendMessage(remoteJid, { text: out }, { quoted: m.messages[0] });
+        } catch (err) {
+          console.error('Error fetching tugas:', err);
+          await sock.sendMessage(remoteJid, { text: 'Gagal mengambil data tugas dari EdLink.' }, { quoted: m.messages[0] });
+        }
+      }
+
       if (remoteJid.endsWith('@g.us') && chatMessage.startsWith('/ai')) {
         const messageUser = chatMessage.slice(4).trim();
         const jawabanAI = await responAI(messageUser, sessionID);
+        console.log(`Jawaban AI: ${jawabanAI}`);
+        
         await sock.sendMessage(remoteJid, { text: jawabanAI }, { quoted: m.messages[0] });
       }
 
@@ -441,7 +484,12 @@ async function connectToWhatsApp() {
           await new Promise(resolve => setTimeout(resolve, 800)); // Delay sebelum soal baru
           
           // 2. Kirim soal berikutnya (bentuk tergantung jenis game)
-          if (nextSoal.soal && !nextSoal.img) {
+          if (session.game === 'susunkata') {
+            await sock.sendMessage(remoteJid, {
+              text: `🧩 *Soal Berikutnya:*\nSusun kata berikut: ${nextSoal.soal}\nKategori: ${nextSoal.tipe}` },
+              { quoted: msg }
+            );
+          } else if (nextSoal.soal && !nextSoal.img) {
             await sock.sendMessage(remoteJid, {
               text: `🧠 *Soal Berikutnya:*\n${nextSoal.soal}` },
               { quoted: msg }
@@ -473,7 +521,15 @@ async function connectToWhatsApp() {
         const game = session.game;
         const soalAktif = session.soal;
 
-        if (game === 'tebakkimia' && soalAktif.soal) {
+        if (game === 'susunkata') {
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text: `🔁 *Soal Ulang:*\nSusun kata berikut: ${soalAktif.soal}\nKategori: ${soalAktif.tipe}`,
+            },
+            { quoted: msg }
+          );
+        } else if (game === 'tebakkimia' && soalAktif.soal) {
           // Soal tebakkimia
           await sock.sendMessage(remoteJid, {
             text: `🔁 *Soal Ulang:*\nClue: Unsur dari ${soalAktif.soal} adalah?`,

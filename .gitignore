@@ -3,3 +3,5 @@ auth_info_baileys/
 node_modules/
 logs/
 migrations/
+.env
+*.db

@@ -27,7 +27,7 @@ function dayAbbrevFromDate(d) {
 }
 
 async function startScheduler(sock, opts = {}) {
-  const offsets = opts.offsets ?? [10, 5]; // minutes before
+  const offsets = opts.offsets ?? [10, 5, 2, 0]; // minutes before
   const freq = opts.freqSeconds ?? 30; // how often to check
 
   await ensureTable();

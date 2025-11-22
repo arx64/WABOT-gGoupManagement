@@ -1,20 +1,108 @@
 // Fungsi untuk memeriksa apakah pengguna adalah admin grup
+import fs from 'fs';
+import path from 'path';
+
 function normalizeJid(jid) {
-  return jid.replace(/:\d+/, ''); // hapus :6, :1, dll
+  return String(jid || '').replace(/:\d+/, ''); // hapus :6, :1, dll
+}
+
+function resolveLidToPhone(localId) {
+  try {
+    const base = path.resolve('auth_info_baileys');
+    // try reverse mapping filename first
+    const revPath = path.join(base, `lid-mapping-${localId}_reverse.json`);
+    const altPath = path.join(base, `lid-mapping-${localId}.json`);
+    let content = null;
+    if (fs.existsSync(revPath)) content = fs.readFileSync(revPath, 'utf8');
+    else if (fs.existsSync(altPath)) content = fs.readFileSync(altPath, 'utf8');
+    if (!content) return null;
+    // content often is a quoted string like "6281934179820"
+    const cleaned = content.trim().replace(/^"|"$/g, '').trim();
+    if (!cleaned) return null;
+    // return full jid
+    return `${cleaned}@s.whatsapp.net`;
+  } catch (e) {
+    return null;
+  }
+}
+
+function resolvePhoneToLid(phoneLocal) {
+  try {
+    const base = path.resolve('auth_info_baileys');
+    const mapPath = path.join(base, `lid-mapping-${phoneLocal}.json`);
+    if (!fs.existsSync(mapPath)) return null;
+    const content = fs.readFileSync(mapPath, 'utf8');
+    const cleaned = content.trim().replace(/^"|"$/g, '').trim();
+    if (!cleaned) return null;
+    return `${cleaned}@lid`;
+  } catch (e) {
+    return null;
+  }
 }
 
 export async function isAdmin(sock, participant, groupJid) {
   try {
     const groupMembers = await sock.groupMetadata(groupJid);
 
-    const adminList = groupMembers.participants.filter((member) => member.admin === 'admin' || member.admin === 'superadmin').map((admin) => normalizeJid(admin.id));
+    // Build participants array and attempt robust matching.
+    const participants = groupMembers.participants || [];
 
-    const normalizedParticipant = normalizeJid(participant);
+    // Normalize participant to lid format if possible
+    let normalizedParticipant = normalizeJid(participant);
+    if (normalizedParticipant.endsWith('@s.whatsapp.net')) {
+      const phoneLocal = (normalizedParticipant.split('@')[0] || '').toLowerCase();
+      const mappedLid = resolvePhoneToLid(phoneLocal);
+      if (mappedLid) {
+        normalizedParticipant = mappedLid;
+        console.log(`Mapped participant ${phoneLocal} -> ${normalizedParticipant}`);
+      }
+    }
 
-    console.log(`adminList: ${adminList}`);
-    console.log(`Participant to check: ${normalizedParticipant}`);
+    const participantLocal = (normalizedParticipant.split('@')[0] || '').toLowerCase();
 
-    return adminList.includes(normalizedParticipant);
+    // Collect admin entries and convert them to lid format when possible
+    const adminEntries = participants.filter((member) => member.admin === 'admin' || member.admin === 'superadmin');
+    const adminList = [];
+    for (const a of adminEntries) {
+      const raw = a.id;
+      const n = normalizeJid(raw);
+      // If admin is a phone JID, try to map to lid
+      if (n.endsWith('@s.whatsapp.net')) {
+        const phoneLocal = (n.split('@')[0] || '').toLowerCase();
+        const mapped = resolvePhoneToLid(phoneLocal);
+        if (mapped) {
+          adminList.push(mapped);
+          console.log(`Mapped admin ${n} -> ${mapped}`);
+          continue;
+        }
+      }
+      // If it's already a lid, keep normalized form
+      if (n.endsWith('@lid')) {
+        adminList.push(n);
+        continue;
+      }
+      // fallback: store normalized raw
+      adminList.push(n);
+    }
+
+    console.log('adminList (as lids where available):', adminList);
+    console.log('Participant to check (normalized to lid if possible):', normalizedParticipant);
+
+    // Direct match first
+    if (adminList.includes(normalizedParticipant)) return true;
+
+    // Fallback: match by local part (compare lid or phone numbers)
+    for (const a of adminList) {
+      const adminLocal = (a.split('@')[0] || '').toLowerCase();
+      if (!adminLocal || !participantLocal) continue;
+      if (adminLocal === participantLocal) return true;
+      if (adminLocal.endsWith(participantLocal)) return true;
+      if (participantLocal.endsWith(adminLocal)) return true;
+      if (adminLocal.includes(participantLocal)) return true;
+      if (participantLocal.includes(adminLocal)) return true;
+    }
+
+    return false;
   } catch (error) {
     console.error('Error saat memeriksa admin:', error);
     return false;

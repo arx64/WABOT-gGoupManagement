@@ -1,0 +1,11 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "driver": "SQLite",
+            "name": "reminders",
+            "database": "${workspaceFolder:zoom-reminder}/reminders.db"
+        }
+    ],
+    "sqltools.useNodeRuntime": true
+}
