@@ -1,4 +1,12 @@
 import db from './db.js';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const TZ = 'Asia/Jakarta';
 
 // Scheduler module: send reminder notifications at offsets before scheduled time.
 // It records sent notifications in table `reminder_notifications` to avoid duplicates.
@@ -18,14 +26,6 @@ async function ensureTable() {
   }
 }
 
-function pad(n) { return n < 10 ? '0' + n : '' + n; }
-
-function dayAbbrevFromDate(d) {
-  // returns Mon, Tue, Wed ...
-  const map = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  return map[d.getDay()];
-}
-
 async function startScheduler(sock, opts = {}) {
   const offsets = opts.offsets ?? [10, 5, 2, 0]; // minutes before
   const freq = opts.freqSeconds ?? 30; // how often to check
@@ -36,12 +36,10 @@ async function startScheduler(sock, opts = {}) {
 
   intervalId = setInterval(async () => {
     try {
-      const now = new Date();
-      const nowDate = now.getFullYear() + '-' + pad(now.getMonth()+1) + '-' + pad(now.getDate());
-      const nowH = pad(now.getHours());
-      const nowM = pad(now.getMinutes());
-      const nowHHMM = `${nowH}:${nowM}`;
-      const todayAbbrev = dayAbbrevFromDate(now); // Mon, Tue
+      const now = dayjs().tz(TZ);
+      const nowDate = now.format('YYYY-MM-DD');
+      const nowHHMM = now.format('HH:mm');
+      const todayAbbrev = now.format('ddd'); // Mon, Tue, etc.
 
       // fetch all reminders
       const reminders = await db('reminders').select('*');
@@ -57,20 +55,17 @@ async function startScheduler(sock, opts = {}) {
         const [hh, mm] = r.reminder_time.split(/[:.]/).map(x => parseInt(x,10));
         if (Number.isNaN(hh) || Number.isNaN(mm)) continue;
 
-        const scheduled = new Date(now);
-        scheduled.setHours(hh, mm, 0, 0);
+        const scheduled = now.hour(hh).minute(mm).second(0).millisecond(0);
 
         for (const off of offsets) {
-          const notifyTime = new Date(scheduled.getTime() - off * 60 * 1000);
-          const notifyHH = pad(notifyTime.getHours());
-          const notifyMM = pad(notifyTime.getMinutes());
-          const notifyHHMM = `${notifyHH}:${notifyMM}`;
+          const notifyTime = scheduled.subtract(off, 'minute');
+          const notifyHHMM = notifyTime.format('HH:mm');
 
           if (notifyHHMM !== nowHHMM) continue;
 
           // check if already sent
           const already = await db('reminder_notifications')
-            .where({ reminder_id: r.id, notify_date: nowDate, offset_min: off })
+            .where({ reminder_id: r.id, notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off })
             .first();
           if (already) continue;
 
@@ -80,7 +75,7 @@ async function startScheduler(sock, opts = {}) {
             await sock.sendMessage(r.added_by, { text });
 
             // record sent
-            await db('reminder_notifications').insert({ reminder_id: r.id, notify_date: nowDate, offset_min: off });
+            await db('reminder_notifications').insert({ reminder_id: r.id, notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off });
             console.log(`Sent reminder for id=${r.id} offset=${off} to ${r.added_by}`);
           } catch (err) {
             console.error('Failed to send scheduled reminder', err);

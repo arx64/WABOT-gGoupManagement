@@ -1,4 +1,12 @@
 import db from './db.js';
+import dayjs from 'dayjs';
+import utc from 'dayjs/plugin/utc.js';
+import timezone from 'dayjs/plugin/timezone.js';
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
+
+const TZ = 'Asia/Jakarta';
 
 // Poll Edlink open assignments/quizzes and send reminders at configured offsets.
 // Requires environment variables:
@@ -22,20 +30,16 @@ async function ensureTable() {
   }
 }
 
-function toISODate(dt) {
-  return dt.getFullYear() + '-' + String(dt.getMonth()+1).padStart(2,'0') + '-' + String(dt.getDate()).padStart(2,'0');
-}
-
 function parseDueAt(dueAt) {
   if (!dueAt) return null;
   // Accept numbers (seconds or ms) or ISO strings
   if (typeof dueAt === 'number') {
-    // if seconds (10 digits) convert to ms
-    if (dueAt < 1e12) dueAt = dueAt * 1000;
-    return new Date(dueAt);
+    if (dueAt < 1e12) dueAt = dueAt * 1000; // seconds -> ms
+    return dayjs(dueAt).tz(TZ);
   }
-  const parsed = Date.parse(dueAt);
-  if (!isNaN(parsed)) return new Date(parsed);
+  // try parse with dayjs and set to TZ
+  const d = dayjs(dueAt);
+  if (d.isValid()) return d.tz(TZ);
   return null;
 }
 
@@ -70,9 +74,9 @@ async function startEdlinkScheduler(sock, opts = {}) {
       }
       const payload = await res.json();
       const items = payload?.data?.data ?? [];
-      const now = new Date();
-      const nowHHMM = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
-      const today = toISODate(now);
+      const now = dayjs().tz(TZ);
+      const nowHHMM = now.format('HH:mm');
+
 
       for (const it of items) {
         // determine due date/time
@@ -80,23 +84,23 @@ async function startEdlinkScheduler(sock, opts = {}) {
         if (!due) continue; // skip items without due time
 
         for (const off of offsets) {
-          const notifyTime = new Date(due.getTime() - off * 60000);
-          const notifyHHMM = String(notifyTime.getHours()).padStart(2,'0') + ':' + String(notifyTime.getMinutes()).padStart(2,'0');
+          const notifyTime = due.subtract(off, 'minute').tz(TZ);
+          const notifyHHMM = notifyTime.format('HH:mm');
           if (notifyHHMM !== nowHHMM) continue;
 
           // already sent?
-          const exists = await db('edlink_notifications').where({ external_id: String(it.id), notify_date: today, offset_min: off }).first();
+          const exists = await db('edlink_notifications').where({ external_id: String(it.id), notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off }).first();
           if (exists) continue;
 
           // build message
           const title = it.title || (it.group?.name ?? 'Tugas/Quiz');
           const groupName = it.group?.className || it.group?.name || '';
-          const link = (it.group?.description && (it.group.description.match(/https?:\/\/[^"]+/) || [])[0]) || '';
-          const text = `🔔 *EDLINK Reminder*\n${title}\nKelas: ${groupName}\nWaktu: ${due.toLocaleString('id-ID')}\n(${off} menit lagi)\n${link}`;
+          const link = (it.group?.description && (it.group.description.match(/https?:\/\/(\S+)/) || [])[0]) || '';
+          const text = `🔔 *EDLINK Reminder*\n${title}\nKelas: ${groupName}\nWaktu: ${due.format('DD/MM/YYYY, HH:mm')}\n(${off} menit lagi)\n${link}`;
 
           try {
             await sock.sendMessage(notifyJid, { text });
-            await db('edlink_notifications').insert({ external_id: String(it.id), notify_date: today, offset_min: off });
+            await db('edlink_notifications').insert({ external_id: String(it.id), notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off });
             console.log('Sent edlink reminder', it.id, off);
           } catch (err) {
             console.error('Failed to send edlink reminder', err);
