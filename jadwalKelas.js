@@ -1,41 +1,34 @@
 import axios from 'axios';
 import dayjs from 'dayjs';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // Fungsi untuk memformat tanggal ke format DD-MM-YYYY
 const formatTanggal = (tanggal) => {
   return dayjs(tanggal).format('DD-MM-YYYY');
 };
 
-// Fungsi untuk melakukan request dan menggabungkan semua output menjadi satu string
-export async function fetchData() {
-  let result = ''; // Variabel untuk menampung semua output
+export async function fetchData(opts = {}) {
+  let result = '';
+
+  const bearer = process.env.EDLINK_BEARER || opts.bearer;
+  if (!bearer) {
+    return 'Error: EDLINK_BEARER belum diset di file .env';
+  }
 
   try {
     const response = await axios.get('https://api.edlink.id/api/v1.4/account/weekly-schedules', {
       headers: {
         accept: 'application/json, text/plain, */*',
-        'accept-encoding': 'gzip, deflate, br, zstd',
-        'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-        authorization: 'Bearer 1ab972e407f158dfd61d393db2e162c0e13ba10991f345a229e177fb7824bab7d7fe881b4b36f155482ac5ac476aca184732ccd95627b9b18aed55f3fc3e04d50',
-        'cache-control': 'no-cache',
-        dnt: '1',
-        origin: 'https://edlink.id',
-        pragma: 'no-cache',
-        priority: 'u=1, i',
-        referer: 'https://edlink.id/',
-        'sec-ch-ua': '"Google Chrome";v="135", "Not-A.Brand";v="8", "Chromium";v="135"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-site',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+        authorization: `Bearer ${bearer}`,
+        'x-app-locale': 'id',
+        'user-agent': 'Mozilla/5.0',
       },
     });
 
-    console.log(response.data);
     if (!response.data.data || response.data.applicationSystem?.message === 'Silakan refresh halaman Anda atau login kembali') {
-      return 'Error: Authorization token tidak valid atau sesi telah berakhir. Silakan login kembali.';
+      return 'Error: Authorization token tidak valid atau sesi berakhir.';
     }
 
     for (const hariData of response.data.data) {
@@ -43,7 +36,7 @@ export async function fetchData() {
       const hari = hariData.day;
 
       if (!hariData.sections || hariData.sections.length === 0) {
-        result += `Tanggal: ${tanggal} \nHari: ${hari} \nTidak ada perkuliahan pada hari ini.\n\n`;
+        result += `Tanggal: ${tanggal}\nHari: ${hari}\nTidak ada perkuliahan.\n\n`;
         continue;
       }
 
@@ -57,13 +50,13 @@ export async function fetchData() {
         const status = section.progressLabel ?? 'Belum selesai';
         const pertemuan = section.meet ?? '-';
 
-        result += `Tanggal: ${tanggal} \nHari: ${hari} \nPertemuan: ${pertemuan} \nStatus: ${status} \nMata Kuliah: ${matkul} - ${kelas} (${metode}) \nJam: ${mulai} - ${selesai} \nRuangan: ${ruang} \n\n`;
+        result += `Tanggal: ${tanggal}\nHari: ${hari}\nPertemuan: ${pertemuan}\nStatus: ${status}\nMata Kuliah: ${matkul} - ${kelas} (${metode})\nJam: ${mulai} - ${selesai}\nRuangan: ${ruang}\n\n`;
       }
     }
 
     return result;
   } catch (error) {
     console.error(error);
-    return `Terjadi kesalahan saat mengambil data\n\n Error: ${error}`;
+    return `Terjadi kesalahan saat mengambil data.\nError: ${error}`;
   }
 }
