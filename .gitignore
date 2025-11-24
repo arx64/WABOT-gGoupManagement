@@ -4,3 +4,4 @@ logs/
 migrations/
 .env
 *.db
+auth_info_baileys
