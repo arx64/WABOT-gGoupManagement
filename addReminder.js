@@ -1,13 +1,13 @@
 import db from './db.js';
 
 const dayMap = {
-  Senin: 'Mon',
-  Selasa: 'Tue',
-  Rabu: 'Wed',
-  Kamis: 'Thu',
-  Jumat: 'Fri',
-  Sabtu: 'Sat',
-  Minggu: 'Sun',
+  senin: 'Mon',
+  selasa: 'Tue',
+  rabu: 'Wed',
+  kamis: 'Thu',
+  jumat: 'Fri',
+  sabtu: 'Sat',
+  minggu: 'Sun',
 };
 
 // Fungsi untuk mengonversi hari-hari dari bahasa Indonesia ke bahasa Inggris
@@ -19,7 +19,8 @@ const convertDaysToEnglish = (days) => {
 };
 
 export async function addReminder(courseName, zoomLink, reminderTime, days, addedBy) {
-  const convertedDays = convertDaysToEnglish(days); // Ubah hari ke bahasa Inggris
+  
+  const convertedDays = convertDaysToEnglish(days.toLowerCase()); // Ubah hari ke bahasa Inggris
   await db('reminders').insert({
     course_name: courseName,
     zoom_link: zoomLink,

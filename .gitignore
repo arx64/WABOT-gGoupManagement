@@ -4,4 +4,5 @@ logs/
 migrations/
 auth_info_baileys/
 uploads/
+.env
 *.db

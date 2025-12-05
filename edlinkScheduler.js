@@ -6,7 +6,7 @@ import timezone from 'dayjs/plugin/timezone.js';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const TZ = 'Asia/Jakarta';
+const TZ = process.env.TIMEZONE || 'Asia/Jakarta';
 
 // Poll Edlink open assignments/quizzes and send reminders at configured offsets.
 // Requires environment variables:
@@ -32,14 +32,12 @@ async function ensureTable() {
 
 function parseDueAt(dueAt) {
   if (!dueAt) return null;
-  // Accept numbers (seconds or ms) or ISO strings
   if (typeof dueAt === 'number') {
-    if (dueAt < 1e12) dueAt = dueAt * 1000; // seconds -> ms
+    if (dueAt < 1e12) dueAt = dueAt * 1000;
     return dayjs(dueAt).tz(TZ);
   }
-  // try parse with dayjs and set to TZ
-  const d = dayjs(dueAt);
-  if (d.isValid()) return d.tz(TZ);
+  const parsed = Date.parse(dueAt);
+  if (!isNaN(parsed)) return dayjs(parsed).tz(TZ);
   return null;
 }
 
@@ -77,16 +75,17 @@ async function startEdlinkScheduler(sock, opts = {}) {
       const now = dayjs().tz(TZ);
       const nowHHMM = now.format('HH:mm');
 
-
       for (const it of items) {
-        // determine due date/time
+        // determine due date/time (dayjs in TZ)
         const due = parseDueAt(it.dueAt || it.publishedAtTimestamp || it.section?.endedAtTimestamp);
         if (!due) continue; // skip items without due time
 
         for (const off of offsets) {
-          const notifyTime = due.subtract(off, 'minute').tz(TZ);
+          const notifyTime = due.subtract(off, 'minute');
           const notifyHHMM = notifyTime.format('HH:mm');
           if (notifyHHMM !== nowHHMM) continue;
+
+          const today = notifyTime.format('YYYY-MM-DD');
 
           // already sent?
           const exists = await db('edlink_notifications').where({ external_id: String(it.id), notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off }).first();
@@ -95,8 +94,8 @@ async function startEdlinkScheduler(sock, opts = {}) {
           // build message
           const title = it.title || (it.group?.name ?? 'Tugas/Quiz');
           const groupName = it.group?.className || it.group?.name || '';
-          const link = (it.group?.description && (it.group.description.match(/https?:\/\/(\S+)/) || [])[0]) || '';
-          const text = `🔔 *EDLINK Reminder*\n${title}\nKelas: ${groupName}\nWaktu: ${due.format('DD/MM/YYYY, HH:mm')}\n(${off} menit lagi)\n${link}`;
+          const link = (it.group?.description && (it.group.description.match(/https?:\/\/[^\"]+/) || [])[0]) || '';
+          const text = `🔔 *EDLINK Reminder*\n${title}\nKelas: ${groupName}\nWaktu: ${due.format('LLLL')}\n(${off} menit lagi)\n${link}`;
 
           try {
             await sock.sendMessage(notifyJid, { text });

@@ -6,7 +6,7 @@ import timezone from 'dayjs/plugin/timezone.js';
 dayjs.extend(utc);
 dayjs.extend(timezone);
 
-const TZ = 'Asia/Jakarta';
+const TZ = process.env.TIMEZONE || 'Asia/Jakarta';
 
 // Scheduler module: send reminder notifications at offsets before scheduled time.
 // It records sent notifications in table `reminder_notifications` to avoid duplicates.
@@ -39,7 +39,7 @@ async function startScheduler(sock, opts = {}) {
       const now = dayjs().tz(TZ);
       const nowDate = now.format('YYYY-MM-DD');
       const nowHHMM = now.format('HH:mm');
-      const todayAbbrev = now.format('ddd'); // Mon, Tue, etc.
+      const todayAbbrev = now.format('ddd'); // Mon, Tue
 
       // fetch all reminders
       const reminders = await db('reminders').select('*');
@@ -60,7 +60,6 @@ async function startScheduler(sock, opts = {}) {
         for (const off of offsets) {
           const notifyTime = scheduled.subtract(off, 'minute');
           const notifyHHMM = notifyTime.format('HH:mm');
-
           if (notifyHHMM !== nowHHMM) continue;
 
           // check if already sent
@@ -76,7 +75,7 @@ async function startScheduler(sock, opts = {}) {
 
             // record sent
             await db('reminder_notifications').insert({ reminder_id: r.id, notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off });
-            console.log(`Sent reminder for id=${r.id} offset=${off} to ${r.added_by}`);
+            console.log(`Sent reminder for id=${r.id} offset=${off} to ${r.added_by} (notify_date=${notifyTime.format('YYYY-MM-DD')})`);
           } catch (err) {
             console.error('Failed to send scheduled reminder', err);
           }
