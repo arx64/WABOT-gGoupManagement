@@ -20,6 +20,7 @@ import gameHandlers from './games/gameHandlers.js';
 import { createNote, getNoteById, listNotes, deleteNote } from './notes.js';
 import { startScheduler, stopScheduler } from './scheduler.js';
 import { startEdlinkScheduler, stopEdlinkScheduler, fetchOpenAssignments } from './edlinkScheduler.js';
+import uploadManager from './uploadManager.js';
 
 let sock;
 const activeGuess = new Map(); // userJid → { word }
@@ -144,6 +145,14 @@ async function connectToWhatsApp() {
           break;
       }
 
+      // If upload session active for this user, let uploadManager handle incoming media
+      try {
+        const handled = await uploadManager.handleIncomingMessage(msg, sock, { chatId, numberUser, pushName });
+        if (handled) return;
+      } catch (e) {
+        console.error('uploadManager error:', e);
+      }
+
       if (!chatMessage) return;
 
       const sessionID = remoteJid;
@@ -216,6 +225,22 @@ async function connectToWhatsApp() {
         const payload = { text };
         if (remoteJid.endsWith('@g.us')) payload.mentions = [numberUser];
         await sock.sendMessage(remoteJid, payload, { quoted: m.messages[0] });
+      }
+
+      // === Upload feature ===
+      if (chatMessage === '/upload') {
+        await uploadManager.startSession(sock, chatId, numberUser);
+        return;
+      }
+
+      if (chatMessage.startsWith('/upload') && chatMessage.includes('show')) {
+        await uploadManager.showFiles(sock, chatId, numberUser);
+        return;
+      }
+
+      if (chatMessage === '/end') {
+        await uploadManager.endSession(sock, chatId, numberUser);
+        return;
       }
 
       if (chatMessage.startsWith('/jadwal')) {

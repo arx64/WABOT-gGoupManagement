@@ -17,6 +17,7 @@
     "better-sqlite3": "^11.3.0",
     "dayjs": "^1.11.13",
     "dotenv": "^17.2.3",
+    "googleapis": "^121.0.0",
     "jimp": "^1.6.0",
     "knex": "^3.1.0",
     "link-preview-js": "^3.2.0",

@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "river-freedom-239722",
+  "private_key_id": "edfedf023768f86640cc7b5da6d68e02b9757451",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvwIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQC8gmSTXC2Z5hL+\nUNvUbTzkfcng5TfprDdbkG7XIY3uhCNvf1GgKOCMpX3Ck4MPBU/C1H5U32aQXIb3\nFn/yMdobkr/sqp8NbuNdnr25rPjsrRPlRoAPGOw8WefG4A1OavJjs+umZK9uAL0J\nNFUL9/4QlKfYu3mCGCXJicUdCcykta1j/Xca1eJkSGbXem29kc7oFwstpU+vO3Bt\nNkMbAc2cWnRhRnlrdEl0er4HxVNBEtGOTcuz6fV0GWtAV1NvPk6PJXNC9aonv1Ku\nvxYcmh9x/zXCC3Iw/SPqaClxEyjkwbPp4BqLrxa2IUf0Ar6dcsOeKqQh0YWO9YVy\nTiCPmzF3AgMBAAECggEAUynRViNt6L3UNkcU3F/+46zM0b8+DgRQfcA37gfbFlVM\nTsWkDJzMB7CAzUUHpipJOGJHg4j1Ng3j6wENnBs7Jjv1GONi/OmlO+mquM3jGYL3\nyofyOfbcTXm6Y4X3yNcsrSi0dvlnXYfM3dEtDfUvrD/w1pBKuEaP8RwrDjcDBcxw\noqwh2VGi0DjHcS5yCi8Sv5iZghaGW6rS5LtEH58oeKN8dSK7wiwFTJrGlxLSnm8K\nQQ0IWEb2F8UfGfC8ExeF+/X4TUB0wsr6d6jT+1IBUtJlnd1KyCOelBh3RJ4Wj/eV\nUuv6GgN07JHaWu0qn261WzaA6AKO2UBvqtclkTOgQQKBgQDnm+vu6a9y83fig2ER\n4uc4OzuZYS/qC9KC992tb+Te65wY/gre1Ux2ZuLgL2UK9wjKJHJgc/jDUQQGv7v+\n+pjWG0YW8/YuCj8oD7kEoTG4V7Skw8HEzyAJ7PvAmreSRlYvt+dzsvLOk2iMabWU\nuWD5rxoEYGpHVVQSlj3UVUv8wQKBgQDQXIWSZaJXW7Wf/Dre0SbDDAv1867PDS+p\nbiepVtgZJOdOqbT6xGmSgjDAiM2ivzYPSwPZPng6wlOHXrxvniVG+rcO0pe/aiHs\nZXfXI8bj4QmTi6OAvC2tnINDgJ9yNZ6CmfQb+dCLn3VkUGTjZ8UV+s6WbWchFBTb\nOi18nizkNwKBgQC/a5HKqt7z/Z+G2ZifpM3/Ho16jeWA5XZ+Agf38TPSvh4MVeJ8\nGwQQE6bNLL6xGkzsbMUPTKo8Gzhdr5fb/BfXVUFPdSBxGszp+lyrI+Ko/evyBUyf\nsaREL9Y+cGDqBzHyTGeBq1OcQh61diS6H6Czm/G/zkPoYvCSUBQX6stbwQKBgQC/\n8Yum+nOb0EM3t28wFjKEGdPm5m5SFQ6kIXLt/6+hMirXf2TWYhvzOHXa1+u/kjAl\n1HAeL/sn/h5epTooBOLISWxbfksGranEkRDeIvo0sPlWb5vWmwPlXDpb8+BuoNB9\n9X84SmEATowhNiJKjyyy+9JWJ0CK62nvLt/6Xehy7wKBgQCz/+xnrQpg1FbxddrJ\nMYq1GctqaIcqeMWMoUV6lY2zpHRnb/1C4wC1frph02Cbl0p9XAfg9x5dMs11VZGC\nvjdpMupwRBqfL7Oe/YOV+TtaleziEgB7OaQnzE/thabdL1swkFHj4NTC85JUsrZN\nDqyeLedrohzbclkEdjHx7QYDbA==\n-----END PRIVATE KEY-----\n",
+  "client_email": "wa-drive@river-freedom-239722.iam.gserviceaccount.com",
+  "client_id": "104760776881410235283",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/wa-drive%40river-freedom-239722.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
