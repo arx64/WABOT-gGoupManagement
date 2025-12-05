@@ -30,6 +30,10 @@ const userScores = {}; // userJid → skor
 const gameSessions = new Map(); // userJid → { game, jawaban, soal }
 const gameScores = {}; // userJid → { name, score }
 
+// Fix ESM dirname
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // persistent auth handled by useMultiFileAuthState; no manual pairing request
 let isLoggedIn = false;
 
