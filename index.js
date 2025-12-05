@@ -1,3 +1,6 @@
+import express from 'express';
+import fs from 'fs';
+
 import 'dotenv/config';
 import QRCode from 'qrcode';
 import path from 'path';
@@ -29,6 +32,35 @@ const gameSessions = new Map(); // userJid → { game, jawaban, soal }
 const gameScores = {}; // userJid → { name, score }
 
 // persistent auth handled by useMultiFileAuthState; no manual pairing request
+let isLoggedIn = false;
+
+const app = express();
+app.use(express.static(__dirname));
+
+// halaman viewer QR — auto refresh
+app.get('/qr', (req, res) => {
+  if (isLoggedIn) {
+    return res.send('<h2>Bot sudah login. QR tidak tersedia lagi.</h2>');
+  }
+
+  res.send(`
+    <html>
+      <body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;">
+        <div style="text-align:center;color:white;">
+          <h2>Scan QR untuk Login WhatsApp</h2>
+          <img src="/qr_code.png?refresh=${Date.now()}" style="max-width:90vw;" />
+          <p style="color:gray;">Refresh otomatis setiap 3 detik…</p>
+        </div>
+        <script>
+          setTimeout(() => location.reload(), 3000);
+        </script>
+      </body>
+    </html>
+  `);
+});
+
+// port Railway: gunakan PORT dari env
+app.listen(process.env.PORT || 3000, () => console.log('🌐 QR viewer: /qr'));
 
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
@@ -44,39 +76,31 @@ async function connectToWhatsApp() {
 
     const __filename = fileURLToPath(import.meta.url);
     const __dirname = path.dirname(__filename);
-    if (update.qr) {
-      console.log('🔳 QR code diterima — silakan scan dengan WhatsApp:');
-      qrcode.generate(update.qr, { small: true });
+    if (update.qr && !isLoggedIn) {
+      console.log('🔳 QR diterima — akses di /qr !');
 
       const qrPath = path.join(__dirname, 'qr_code.png');
 
-      // generate PNG
-      QRCode.toFile(
-        qrPath,
-        update.qr,
-        {
-          width: 600,
-          margin: 2,
-        },
-        (err) => {
-          if (err) return console.error('Gagal membuat QR Code:', err);
-
-          console.log(`\n📁 QR Code telah dibuat di: ${qrPath}`);
-
-          // Buka otomatis sesuai OS
-          const openCmd = process.platform === 'win32' ? `start "" "${qrPath}"` : process.platform === 'darwin' ? `open "${qrPath}"` : `xdg-open "${qrPath}"`;
-
-          exec(openCmd, (err) => {
-            if (err) console.log('Tidak bisa membuka file QR secara otomatis');
-          });
-        }
-      );
+      QRCode.toFile(qrPath, update.qr, { width: 600, margin: 2 }, (err) => {
+        if (err) return console.error('Gagal membuat QR Code:', err);
+        console.log(`📁 QR diperbarui di: ${qrPath}`);
+      });
     }
+
 
     if (lastDisconnect?.error) {
       console.error('🔴 Error:', lastDisconnect.error?.output?.payload?.message || lastDisconnect.error.message);
     }
     if (connection === 'open') {
+      isLoggedIn = true;
+
+      // hapus QR setelah connect
+      const qrPath = path.join(__dirname, 'qr_code.png');
+      if (fs.existsSync(qrPath)) {
+        fs.unlinkSync(qrPath);
+        console.log('🗑️ QR Code dihapus — tidak diperlukan lagi!');
+      }
+
       console.log('✅ Terhubung ke WhatsApp!');
       // start scheduler when connection opens
       try {
