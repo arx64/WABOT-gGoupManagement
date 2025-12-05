@@ -5,7 +5,6 @@ import 'dotenv/config';
 import QRCode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import { responAI } from './gpt.js';
@@ -74,8 +73,7 @@ async function connectToWhatsApp() {
 
     console.log('📶 Status koneksi:', connection);
 
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
+
     if (update.qr && !isLoggedIn) {
       console.log('🔳 QR diterima — akses di /qr !');
 
