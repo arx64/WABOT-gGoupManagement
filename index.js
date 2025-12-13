@@ -146,30 +146,41 @@ async function connectToWhatsApp() {
       const pushName = m.messages[0].pushName;
       const numberUser = m.messages[0].key.participant || m.messages[0].key.remoteJid || m.messages[0].key.remoteJidAlt;
 
-      const message = m.messages[0].message;
-      const msg = m.messages[0];
+      // const message = m.messages[0].message;
+      // const msg = m.messages[0];
       const messageArr = m.messages[0];
       const remoteJid = m.messages[0].key.remoteJid;
       const chatId = remoteJid.endsWith('@g.us') ? remoteJid : numberUser;
       const isGroup = remoteJid.endsWith('@g.us');
       const sessionKey = isGroup ? remoteJid : numberUser;
 
-      let chatMessage;
+      // let chatMessage;
 
-      switch (true) {
-        case !!message.conversation:
-          chatMessage = message.conversation;
-          break;
-        case !!(message.extendedTextMessage && message.extendedTextMessage.text):
-          chatMessage = message.extendedTextMessage.text;
-          break;
-        case !!(message.imageMessage && message.imageMessage.caption):
-          chatMessage = message.imageMessage.caption;
-          break;
-        case !!(message.videoMessage && message.videoMessage.caption):
-          chatMessage = message.videoMessage.caption;
-          break;
-      }
+      // switch (true) {
+      //   case !!message.conversation:
+      //     chatMessage = message.conversation;
+      //     break;
+      //   case !!(message.extendedTextMessage && message.extendedTextMessage.text):
+      //     chatMessage = message.extendedTextMessage.text;
+      //     break;
+      //   case !!(message.imageMessage && message.imageMessage.caption):
+      //     chatMessage = message.imageMessage.caption;
+      //     break;
+      //   case !!(message.videoMessage && message.videoMessage.caption):
+      //     chatMessage = message.videoMessage.caption;
+      //     break;
+      // }
+      
+      const msg = m.messages?.[0];
+      if (!msg || msg.key?.fromMe) return;
+
+      const message = msg.message;
+      if (!message) return;
+
+      const chatMessage = message.conversation || message.extendedTextMessage?.text || message.imageMessage?.caption || message.videoMessage?.caption || message.documentMessage?.caption || '';
+
+      if (!chatMessage) return;
+
 
       // If upload session active for this user, let uploadManager handle incoming media
       try {
