@@ -7,140 +7,125 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export async function createGroupWithFile(sock, message, groupNameRaw, senderJid) {
-  // try {
-  console.log(`isi dari message: `, JSON.stringify(message));
-
-  // Validasi input
-  if (!message || !message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.documentWithCaptionMessage?.message?.documentMessage || !message.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-    console.error('❌ Message tidak valid:', message);
-    await sock.sendMessage(senderJid, { text: '❗ Pastikan Anda membalas file .txt berisi nomor, lalu gunakan perintah:\n`/new "Nama Grup"`' }, { qouted: message });
-    return;
-  }
-
-  // Ekstrak quoted message
-  // const quoted = message.message.extendedTextMessage.contextInfo.quotedMessage ?? message.message.extendedTextMessage?.contextInfo?.quotedMessage?.documentWithCaptionMessage?.message?.documentMessage;
-  // const quoted = message.message.extendedTextMessage.contextInfo.quotedMessage ?? message.message?.extendedTextMessage?.contextInfo?.quotedMessage?.documentWithCaptionMessage?.message?.documentMessage;
-  const contextInfo = message.message?.extendedTextMessage?.contextInfo;
-  const quotedMessage = contextInfo?.quotedMessage;
-
-  let quoted = null;
-
-  if (quotedMessage?.documentMessage) {
-    quoted = quotedMessage;
-  } else if (quotedMessage?.documentWithCaptionMessage?.message?.documentMessage) {
-    quoted = quotedMessage.documentWithCaptionMessage.message;
-  }
-
-  // Cek apakah quoted message berisi file teks
-  if (!quoted?.documentMessage || !quoted.documentMessage.mimetype.includes('text/plain')) {
-    console.error('❌ Quoted message tidak valid:', quoted);
-    await sock.sendMessage(senderJid, { text: `❗ Pastikan Anda membalas file .txt berisi nomor.` }, { qouted: message });
-    return;
-  }
-
-  // if (!quoted || !quoted.documentMessage || !quoted.documentMessage.mimetype.includes('text/plain') || !quoted.documentWithCaptionMessage.message.documentMessage || !!quoted.documentWithCaptionMessage.message.documentMessage.mimetype.includes('text/plain')) {
-  //   console.error('❌ Quoted message tidak valid:', quoted);
-  //   await sock.sendMessage(senderJid, { text: `❗ Pastikan Anda membalas file .txt berisi nomor.\nError: ${qouted}` });
-  //   return;
-  // }
-
-  // Download file
-  // const buffer = await downloadMediaMessage(message, 'buffer', {}, { logger: console });
-  const buffer = await downloadMediaMessage(
-    {
-      key: {
-        ...(message.message.extendedTextMessage.contextInfo.stanzaId && {
-          remoteJid: message.key.remoteJid,
-          id: message.message.extendedTextMessage.contextInfo.stanzaId,
-          fromMe: message.message.extendedTextMessage.contextInfo.participant === senderJid,
-          participant: message.message.extendedTextMessage.contextInfo.participant,
-        }),
-      },
-      message: quoted,
-    },
-    'buffer',
-    {},
-    { logger: console }
-  );
-  if (!buffer) {
-    console.error('❌ Gagal mengunduh file.');
-    await sock.sendMessage(senderJid, { text: '❗ Gagal mengunduh file. Pastikan file yang Anda kirim adalah file .txt.' }, { qouted: message });
-    return;
-  }
-
-  // Simpan file sementara
-  const tempPath = path.join(__dirname, 'temp.txt');
-  fs.writeFileSync(tempPath, buffer);
-
-  // Baca isi file
-  const rawData = fs.readFileSync(tempPath, 'utf-8');
-  if (!rawData.trim()) {
-    console.error('❌ File kosong.');
-    await sock.sendMessage(senderJid, { text: '❗ File yang Anda kirim kosong. Harap unggah file dengan daftar nomor telepon.' }, { qouted: message });
-    fs.unlinkSync(tempPath); // Hapus file sementara
-    return;
-  }
-
-  const lines = rawData
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  // Normalisasi nomor
-  const participants = lines
-    .map((num) => {
-      let normalized = num.replace(/\D/g, '');
-      if (normalized.startsWith('0')) normalized = '62' + normalized.slice(1);
-      if (!normalized.startsWith('62')) return null;
-      return normalized + '@s.whatsapp.net';
-    })
-    .filter(Boolean);
-
-  if (!participants.length) {
-    console.error('❌ Tidak ada nomor valid dalam file.');
-    await sock.sendMessage(senderJid, { text: '❗ Tidak ada nomor telepon valid dalam file.' }, { qouted: message });
-    fs.unlinkSync(tempPath); // Hapus file sementara
-    return;
-  }
-
-  // Tambahkan pengirim sebagai peserta awal
-  participants.unshift(senderJid);
-
-  // Ambil nama grup dari command
-  const groupName = groupNameRaw.replace(/^\/new\s+/i, '').replace(/^["']|["']$/g, '');
-  if (!groupName.trim()) {
-    console.error('❌ Nama grup kosong.');
-    await sock.sendMessage(senderJid, { text: '❗ Nama grup tidak boleh kosong. Gunakan format:\n`/new "Nama Grup"`' }, { qouted: message });
-    fs.unlinkSync(tempPath); // Hapus file sementara
-    return;
-  }
-
-  // Buat grup baru
-  const groupResult = await sock.groupCreate(groupName, participants);
-  if (groupResult.id) {
-    await sock.sendMessage(senderJid, { text: `✅ Grup *${groupName}* berhasil dibuat!` }, { qouted: message });
-  }
-  console.log(`✅ Grup berhasil dibuat: ${groupResult.id}`);
-  console.log(`Info grup:`, groupResult);
-
-  const groupId = groupResult.id;
-
-  // Pastikan pengirim menjadi admin
-  await sock.groupParticipantsUpdate(groupId, [senderJid], 'promote');
-
-  // Hapus file temp
-  fs.unlinkSync(tempPath);
-
-  // Ambil invite code grup
-  let inviteCode;
+export async function createGroupWithFile(sock, msg, chatMessage, senderJid) {
   try {
-    inviteCode = await sock.groupInviteCode(groupId);
-  } catch (e) {
-    inviteCode = null;
-  }
+    /* =========================================================
+     * 1. VALIDASI DASAR
+     * ========================================================= */
+    const ext = msg.message?.extendedTextMessage;
+    const contextInfo = ext?.contextInfo;
 
-  // Kirim notifikasi sukses
-  const link = inviteCode ? `https://chat.whatsapp.com/${inviteCode}` : 'Link undangan tidak tersedia.';
-  await sock.sendMessage(senderJid, { text: `✅ Grup *${groupName}* berhasil dibuat!\nℹ️ *${groupResult.participants.length} Peserta* Berhasil Ditambahkan!\n📍 Link: ${link}` }, { qouted: message });
-};
+    if (!contextInfo?.quotedMessage) {
+      await sock.sendMessage(
+        senderJid,
+        {
+          text: '❗ Perintah *harus* dikirim dengan *membalas file .txt*.\n\n' + '📌 Contoh:\nBalas file ➜ `/new "Nama Grup"`',
+        },
+        { quoted: msg }
+      );
+      return;
+    }
+
+    /* =========================================================
+     * 2. EKSTRAK DOCUMENT MESSAGE (AMAN & UNIVERSAL)
+     * ========================================================= */
+    const quoted = contextInfo.quotedMessage;
+
+    let documentMessage = null;
+
+    if (quoted.documentMessage) {
+      documentMessage = quoted.documentMessage;
+    } else if (quoted.documentWithCaptionMessage?.message?.documentMessage) {
+      documentMessage = quoted.documentWithCaptionMessage.message.documentMessage;
+    }
+
+    if (!documentMessage) {
+      await sock.sendMessage(senderJid, { text: '❗ Pesan yang dibalas *bukan file*.' }, { quoted: msg });
+      return;
+    }
+
+    if (!documentMessage.mimetype?.includes('text/plain')) {
+      await sock.sendMessage(senderJid, { text: '❗ File harus berupa *.txt* berisi nomor telepon.' }, { quoted: msg });
+      return;
+    }
+
+    /* =========================================================
+     * 3. DOWNLOAD FILE (CARA RESMI & STABIL)
+     * ========================================================= */
+    const buffer = await downloadMediaMessage({ message: { documentMessage } }, 'buffer', {}, { logger: console });
+
+    if (!buffer) {
+      await sock.sendMessage(senderJid, { text: '❗ Gagal mengunduh file.' }, { quoted: msg });
+      return;
+    }
+
+    /* =========================================================
+     * 4. BACA & VALIDASI ISI FILE
+     * ========================================================= */
+    const content = buffer.toString('utf-8').trim();
+
+    if (!content) {
+      await sock.sendMessage(senderJid, { text: '❗ File kosong.' }, { quoted: msg });
+      return;
+    }
+
+    const numbers = content
+      .split(/\r?\n/)
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .map((num) => {
+        let n = num.replace(/\D/g, '');
+        if (n.startsWith('0')) n = '62' + n.slice(1);
+        if (!n.startsWith('62')) return null;
+        return n + '@s.whatsapp.net';
+      })
+      .filter(Boolean);
+
+    if (!numbers.length) {
+      await sock.sendMessage(senderJid, { text: '❗ Tidak ditemukan nomor valid di file.' }, { quoted: msg });
+      return;
+    }
+
+    /* =========================================================
+     * 5. PARSE NAMA GRUP
+     * ========================================================= */
+    const groupName = chatMessage
+      .replace(/^\/new\s+/i, '')
+      .replace(/^["']|["']$/g, '')
+      .trim();
+
+    if (!groupName) {
+      await sock.sendMessage(senderJid, { text: '❗ Nama grup tidak boleh kosong.' }, { quoted: msg });
+      return;
+    }
+
+    /* =========================================================
+     * 6. BUAT GRUP
+     * ========================================================= */
+    const participants = [senderJid, ...numbers];
+    const group = await sock.groupCreate(groupName, participants);
+
+    await sock.groupParticipantsUpdate(group.id, [senderJid], 'promote');
+
+    /* =========================================================
+     * 7. INVITE LINK
+     * ========================================================= */
+    let invite = null;
+    try {
+      invite = await sock.groupInviteCode(group.id);
+    } catch (_) {}
+
+    const link = invite ? `https://chat.whatsapp.com/${invite}` : 'Link tidak tersedia';
+
+    await sock.sendMessage(
+      senderJid,
+      {
+        text: `✅ *Grup berhasil dibuat!*\n\n` + `📛 Nama: *${groupName}*\n` + `👥 Peserta: *${participants.length}*\n` + `🔗 Link: ${link}`,
+      },
+      { quoted: msg }
+    );
+  } catch (err) {
+    console.error('createGroupWithFile error:', err);
+    await sock.sendMessage(senderJid, { text: '❌ Terjadi kesalahan internal saat membuat grup.' }, { quoted: msg });
+  }
+}
