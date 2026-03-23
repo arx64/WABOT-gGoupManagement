@@ -197,8 +197,18 @@ app.listen(process.env.PORT || 3000, () => console.log('🌐 QR viewer: /qr'));
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
-  sock = makeWASocket({
+  // sock = makeWASocket({
+  //   auth: state,
+  // });
+  // fetch latest WhatsApp version
+  const [waVersion] = await fetchLatestBaileysVersion();
+  const sock = makeWASocket({
     auth: state,
+    version: waVersion,
+    browser: ['Chrome', 'Windows', '110.0.5481.177'], // simulate real browser
+    logger: pino({ level: 'info' }),
+    connectTimeoutMs: 60_000,
+    patchMessageBeforeSending: (msg) => msg,
   });
 
   sock.ev.on('connection.update', async (update) => {
@@ -219,7 +229,6 @@ async function connectToWhatsApp() {
         console.log('✅ QR updated (base64)');
       });
     }
-
 
     if (lastDisconnect?.error) {
       console.error('🔴 Error:', lastDisconnect.error?.output?.payload?.message || lastDisconnect.error.message);
@@ -313,7 +322,7 @@ async function connectToWhatsApp() {
       //     chatMessage = message.videoMessage.caption;
       //     break;
       // }
-      
+
       // msg already declared in outer scope (line 273)
       // const msg = m.messages?.[0];
 
@@ -323,7 +332,7 @@ async function connectToWhatsApp() {
 
       // Extract text/caption from message (could be empty for pure media messages)
       const chatMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || '';
-      
+
       // IMPORTANT: Check upload session FIRST before returning on empty chatMessage
       // because media files without caption will have empty chatMessage
       try {
@@ -332,7 +341,7 @@ async function connectToWhatsApp() {
       } catch (e) {
         console.error('uploadManager error:', e);
       }
-      
+
       // Now safe to return if no text message and not handled by uploadManager
       if (!chatMessage) return;
 
@@ -341,7 +350,7 @@ async function connectToWhatsApp() {
       if (chatMessage.startsWith('/menu')) {
         const displayName = remoteJid.endsWith('@g.us') ? numberUser.split('@')[0] : pushName;
         const menuText = generateMenu(displayName, remoteJid.endsWith('@g.us'));
-        
+
         const payload = { text: menuText };
         if (remoteJid.endsWith('@g.us')) payload.mentions = [numberUser];
         await sock.sendMessage(remoteJid, payload, { quoted: m.messages[0] });
@@ -368,15 +377,15 @@ async function connectToWhatsApp() {
         let unwrappedMessage = null;
         let originalQuotedMessage = null;
         let targetMessage = null;
-        
+
         // Check if the message is a reply
         const isReply = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-        
+
         if (isReply) {
           // Mode 1: Using reply
           originalQuotedMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage;
           targetMessage = originalQuotedMessage;
-          
+
           // Unwrap view-once messages to detect type
           if (originalQuotedMessage.viewOnceMessage) {
             unwrappedMessage = originalQuotedMessage.viewOnceMessage.message;
@@ -388,12 +397,12 @@ async function connectToWhatsApp() {
         } else {
           // Mode 2: Auto-search recent view-once messages from cache
           targetMessage = findRecentViewOnce(remoteJid);
-          
+
           if (!targetMessage) {
             await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ditemukan media view-once di cache.\n\n💡 Tips: Reply langsung ke pesan view-once lalu ketik /see' }, { quoted: msg });
             return;
           }
-          
+
           // Unwrap view-once message
           if (targetMessage.viewOnceMessage) {
             unwrappedMessage = targetMessage.viewOnceMessage.message;
@@ -408,7 +417,7 @@ async function connectToWhatsApp() {
           await sock.sendMessage(remoteJid, { text: '❌ Gagal membaca pesan. Silakan coba lagi.' }, { quoted: msg });
           return;
         }
-        
+
         // Check if quoted message has media (image, video, document, audio, etc.)
         let mediaMessage = null;
         let mediaType = null;
@@ -449,12 +458,18 @@ async function connectToWhatsApp() {
           // Build proper message structure for downloadMediaMessage
           const messageForDownload = {
             message: {
-              [mediaType === 'image' ? 'imageMessage' : 
-               mediaType === 'video' ? 'videoMessage' : 
-               mediaType === 'audio' ? 'audioMessage' : 
-               mediaType === 'document' ? 'documentMessage' : 
-               mediaType === 'sticker' ? 'stickerMessage' : 'imageMessage']: mediaMessage
-            }
+              [mediaType === 'image'
+                ? 'imageMessage'
+                : mediaType === 'video'
+                  ? 'videoMessage'
+                  : mediaType === 'audio'
+                    ? 'audioMessage'
+                    : mediaType === 'document'
+                      ? 'documentMessage'
+                      : mediaType === 'sticker'
+                        ? 'stickerMessage'
+                        : 'imageMessage']: mediaMessage,
+            },
           };
 
           let buffer;
@@ -476,10 +491,10 @@ async function connectToWhatsApp() {
               }
             }
           }
-          
+
           // Send back as regular file (non-view-once)
           const messagePayload = {};
-          
+
           if (mediaType === 'image') {
             messagePayload.image = buffer;
             if (caption) {
@@ -596,7 +611,7 @@ async function connectToWhatsApp() {
             {
               text: `Jadwal berhasil ditambahkan:\nMata Kuliah: ${courseName}\nLink: ${zoomLink}\nJam: ${reminderTime}\nHari: ${days}`,
             },
-            { quoted: m.messages[0] }
+            { quoted: m.messages[0] },
           );
         } else {
           await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /addList "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
@@ -694,7 +709,7 @@ async function connectToWhatsApp() {
             {
               text: '🚪 Permainan telah dihentikan.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
         } else {
           await sock.sendMessage(
@@ -702,7 +717,7 @@ async function connectToWhatsApp() {
             {
               text: '❌ Tidak ada permainan aktif saat ini.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
         }
         return;
@@ -728,7 +743,7 @@ async function connectToWhatsApp() {
           {
             text: '⏭️ Soal dilewati. Berikut soal selanjutnya:',
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         // Kirim soal baru sesuai jenisnya
@@ -738,7 +753,7 @@ async function connectToWhatsApp() {
             {
               text: `🧠 ${nextSoal.soal}`,
             },
-            { quoted: msg }
+            { quoted: msg },
           );
         } else if (session.game === 'tebakgambar' && nextSoal.img) {
           await sock.sendMessage(
@@ -747,7 +762,7 @@ async function connectToWhatsApp() {
               image: { url: nextSoal.img },
               caption: `🖼️ *Clue:*\n${nextSoal.deskripsi || 'Tidak ada'}`,
             },
-            { quoted: msg }
+            { quoted: msg },
           );
         } else if (nextSoal.img) {
           await sock.sendMessage(
@@ -756,7 +771,7 @@ async function connectToWhatsApp() {
               image: { url: nextSoal.img },
               caption: '🖼️ Soal Berikutnya!',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
         }
 
@@ -790,7 +805,7 @@ async function connectToWhatsApp() {
                 {
                   text: `✅ Semua jawaban benar!`,
                 },
-                { quoted: msg }
+                { quoted: msg },
               );
 
               await sock.sendMessage(
@@ -798,7 +813,7 @@ async function connectToWhatsApp() {
                 {
                   text: `💯 *FAMILY 100*\n${next.soal}`,
                 },
-                { quoted: msg }
+                { quoted: msg },
               );
             } else {
               await sock.sendMessage(
@@ -806,7 +821,7 @@ async function connectToWhatsApp() {
                 {
                   text: `✅ Benar! Masih ${sisa} jawaban lagi.`,
                 },
-                { quoted: msg }
+                { quoted: msg },
               );
             }
           } else {
@@ -815,7 +830,7 @@ async function connectToWhatsApp() {
               {
                 text: `❌ Salah atau sudah dijawab.`,
               },
-              { quoted: msg }
+              { quoted: msg },
             );
           }
           return;
@@ -841,7 +856,7 @@ async function connectToWhatsApp() {
             {
               text: `✅ Benar! Point +10\n\n${deskripsi}`,
             },
-            { quoted: msg }
+            { quoted: msg },
           );
 
           await new Promise((resolve) => setTimeout(resolve, 800)); // Delay sebelum soal baru
@@ -853,7 +868,7 @@ async function connectToWhatsApp() {
               {
                 text: `🧩 *Soal Berikutnya:*\nSusun kata berikut: ${nextSoal.soal}\nKategori: ${nextSoal.tipe}`,
               },
-              { quoted: msg }
+              { quoted: msg },
             );
           } else if (nextSoal.soal && !nextSoal.img) {
             await sock.sendMessage(
@@ -861,7 +876,7 @@ async function connectToWhatsApp() {
               {
                 text: `🧠 *Soal Berikutnya:*\n${nextSoal.soal}`,
               },
-              { quoted: msg }
+              { quoted: msg },
             );
           } else if (session.game === 'tebakgambar' && nextSoal.img) {
             await sock.sendMessage(remoteJid, {
@@ -886,7 +901,7 @@ async function connectToWhatsApp() {
           {
             text: `❌ Salah. Coba lagi atau ketik /exit untuk keluar.`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         // Kirim ulang soal aktif
@@ -899,7 +914,7 @@ async function connectToWhatsApp() {
             {
               text: `🔁 *Soal Ulang:*\nSusun kata berikut: ${soalAktif.soal}\nKategori: ${soalAktif.tipe}`,
             },
-            { quoted: msg }
+            { quoted: msg },
           );
         } else if (game === 'tebakkimia' && soalAktif.soal) {
           // Soal tebakkimia
@@ -944,7 +959,7 @@ async function connectToWhatsApp() {
             {
               text: '📊 Belum ada pemain di leaderboard untuk chat ini.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -964,7 +979,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -980,7 +995,7 @@ async function connectToWhatsApp() {
           {
             text: `🧠 *ASAH OTAK*\n${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
         return;
       }
@@ -992,7 +1007,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1009,7 +1024,7 @@ async function connectToWhatsApp() {
           {
             text: `🤣 *CAK LONTONG*\n${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
         return;
       }
@@ -1021,7 +1036,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1038,7 +1053,7 @@ async function connectToWhatsApp() {
           {
             text: `💯 *FAMILY 100*\n${soal.soal}\n\nTebak semua ${soal.jawaban.length} jawabannya!`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
         return;
       }
@@ -1050,7 +1065,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1068,7 +1083,7 @@ async function connectToWhatsApp() {
           {
             text: `👤 *SIAPAKAH AKU*\n${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1081,7 +1096,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1100,7 +1115,7 @@ async function connectToWhatsApp() {
           {
             text: `🔤 *SUSUN KATA*\n${soal.soal}\n*Kategori:* ${soal.tipe}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1113,7 +1128,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1132,7 +1147,7 @@ async function connectToWhatsApp() {
             image: { url: soal.img },
             caption: `🚩 *TEBAK BENDERA*\nNegara apakah ini?`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1145,7 +1160,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1164,7 +1179,7 @@ async function connectToWhatsApp() {
             image: { url: soal.img },
             caption: `🚩 *TEBAK BENDERA*\nNegara apakah ini?`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1177,7 +1192,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1196,7 +1211,7 @@ async function connectToWhatsApp() {
             image: { url: soal.img },
             caption: `🖼️ *TEBAK GAMBAR*\nApa yang ada di gambar ini?\n\nClue: ${soal.deskripsi}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1209,7 +1224,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1228,7 +1243,7 @@ async function connectToWhatsApp() {
             image: { url: soal.img },
             caption: `🏙️ *TEBAK KABUPATEN*\nApa nama kabupaten ini?`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1241,7 +1256,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1259,7 +1274,7 @@ async function connectToWhatsApp() {
           {
             text: `✍️ *TEBAK KALIMAT*\n${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1272,7 +1287,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1290,7 +1305,7 @@ async function connectToWhatsApp() {
           {
             text: `✍️ *TEBAK KATA*\nClue: ${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1303,7 +1318,7 @@ async function connectToWhatsApp() {
             {
               text: '⚠️ Masih ada game aktif. Ketik /exit untuk keluar.',
             },
-            { quoted: msg }
+            { quoted: msg },
           );
           return;
         }
@@ -1321,7 +1336,7 @@ async function connectToWhatsApp() {
           {
             text: `✍️ *TEBAK KIMIA*\nClue: Unsur dari ${soal.soal} adalah?`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
 
         return;
@@ -1347,7 +1362,7 @@ async function connectToWhatsApp() {
             text: `🎵 *TEBAK LIRIK*
 ${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
         return;
       }
@@ -1372,7 +1387,7 @@ ${soal.soal}`,
             text: `🧩 *TEBAK-TEBAKAN*
 ${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
         return;
       }
@@ -1397,7 +1412,7 @@ ${soal.soal}`,
             text: `❓ *TEKA-TEKI*
 ${soal.soal}`,
           },
-          { quoted: msg }
+          { quoted: msg },
         );
         return;
       }
