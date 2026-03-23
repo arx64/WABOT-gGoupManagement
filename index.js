@@ -201,7 +201,7 @@ async function connectToWhatsApp() {
   //   auth: state,
   // });
   // fetch latest WhatsApp version
-  const [waVersion] = await fetchLatestBaileysVersion();
+  const { version: waVersion } = await fetchLatestBaileysVersion();
   const sock = makeWASocket({
     auth: state,
     version: waVersion,
