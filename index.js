@@ -5,7 +5,7 @@ import 'dotenv/config';
 import QRCode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeysockets/baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, downloadMediaMessage } from '@whiskeysockets/baileys';
 import qrcode from 'qrcode-terminal';
 import { responAI } from './gpt.js';
 import { fetchData } from './jadwalKelas.js';
@@ -36,6 +36,106 @@ const __dirname = path.dirname(__filename);
 
 // persistent auth handled by useMultiFileAuthState; no manual pairing request
 let isLoggedIn = false;
+
+// ===== MENU CONFIGURATION =====
+const MENU_CATEGORIES = {
+  ai: {
+    emoji: '🤖',
+    title: 'AI & CHAT',
+    commands: [
+      { cmd: '/ai [Pesan]', desc: 'Chat dengan AI' }
+    ]
+  },
+  edlink: {
+    emoji: '📚',
+    title: 'AKADEMIK',
+    commands: [
+      { cmd: '/tugas', desc: 'Cek tugas/quiz terbuka dari EdLink' },
+      { cmd: '/jadwal', desc: 'Lihat jadwal mingguan dari EdLink' }
+    ]
+  },
+  reminder: {
+    emoji: '⏰',
+    title: 'REMINDER',
+    commands: [
+      { cmd: '/list', desc: 'Lihat semua jadwal reminder' },
+      { cmd: '/addList "Nama Kuliah" <Link> <Jam> <Hari>', desc: 'Tambah jadwal ke database' },
+      { cmd: '/delete <ID>', desc: 'Hapus reminder' }
+    ]
+  },
+  group: {
+    emoji: '👥',
+    title: 'GRUP MANAGEMENT',
+    commands: [
+      { cmd: '/add', desc: 'Tambah member ke grup' },
+      { cmd: '/kick', desc: 'Keluarkan member dari grup' },
+      { cmd: '/tagall', desc: 'Tag semua member (hanya grup!)' },
+      { cmd: '/new "Nama Grup"', desc: 'Buat grup baru dari file txt' },
+      { cmd: '/getAllMember', desc: 'Export member grup ke txt' }
+    ]
+  },
+  notes: {
+    emoji: '📝',
+    title: 'NOTES',
+    commands: [
+      { cmd: '/notes <teks>', desc: 'Buat note baru' },
+      { cmd: '/notes <ID>', desc: 'Lihat note tertentu' },
+      { cmd: '/notes show', desc: 'Lihat semua notes' },
+      { cmd: '/notes delete <ID>', desc: 'Hapus note' }
+    ]
+  },
+  media: {
+    emoji: '📎',
+    title: 'MEDIA & FILE',
+    commands: [
+      { cmd: '/see', desc: 'Kirim file sekali dilihat sebagai file biasa (reply pesan)' }
+    ]
+  },
+  games: {
+    emoji: '🎮',
+    title: 'PERMAINAN',
+    commands: [
+      { cmd: '/asahotak', desc: 'Asah Otak' },
+      { cmd: '/caklontong', desc: 'Cak Lontong' },
+      { cmd: '/family100', desc: 'Family 100' },
+      { cmd: '/siapakahaku', desc: 'Siapakah Aku' },
+      { cmd: '/susunkata', desc: 'Susun Kata' },
+      { cmd: '/tebakbendera', desc: 'Tebak Bendera' },
+      { cmd: '/tebakbendera2', desc: 'Tebak Bendera 2' },
+      { cmd: '/tebakgambar', desc: 'Tebak Gambar' },
+      { cmd: '/tebakkalimat', desc: 'Tebak Kalimat' },
+      { cmd: '/tebakkata', desc: 'Tebak Kata' },
+      { cmd: '/tebakkimia', desc: 'Tebak Kimia' },
+      { cmd: '/tebaklirik', desc: 'Tebak Lirik' },
+      { cmd: '/tebaktebakan', desc: 'Tebak-Tebakan' },
+      { cmd: '/tekateki', desc: 'Teka-Teki' },
+      { cmd: '/leaderboard', desc: 'Lihat leaderboard' },
+      { cmd: '/skip', desc: 'Lewati soal saat ini' },
+      { cmd: '/exit', desc: 'Keluar dari permainan' }
+    ]
+  }
+};
+
+function generateMenu(userName, isGroup) {
+  let menu = `╔═══════════════════════════════════╗\n`;
+  menu += `║  👋 Halo ${isGroup ? `@${userName}` : userName}!\n`;
+  menu += `║  Berikut adalah menu yang tersedia:\n`;
+  menu += `╚═══════════════════════════════════╝\n\n`;
+
+  Object.values(MENU_CATEGORIES).forEach(category => {
+    menu += `${category.emoji} *${category.title}*\n`;
+    menu += `${'─'.repeat(35)}\n`;
+    category.commands.forEach(cmd => {
+      menu += `  ${cmd.cmd}\n    └─ ${cmd.desc}\n`;
+    });
+    menu += `\n`;
+  });
+
+  menu += `═══════════════════════════════════\n`;
+  menu += `💡 *Tips:* Ketik perintah untuk memulai!\n`;
+
+  return menu;
+}
 
 const app = express();
 app.use(express.static(__dirname));
@@ -195,71 +295,10 @@ async function connectToWhatsApp() {
       const sessionID = remoteJid;
 
       if (chatMessage.startsWith('/menu')) {
-        console.log(`Isi dari NumberUser: ${numberUser}\n\nIsi dari remoteJid: ${remoteJid}\n\nIsi dari pushName: ${pushName}\n\nIsi dari chatMessage: ${msg}`);
-
-        const groupMenu = `Halo *@${numberUser.split('@')[0]} (${pushName})*, menu saat ini adalah:
- /ai [Pesan] - Untuk  chat dengan AI
- /tugas - Cek tugas/quiz terbuka dari EdLink
- /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
- /list - Melihat semua list yang telah berada di auto reminder
- /addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
- /delete - Untuk menghapus reminder
- /add - Untuk add member di dalam grup
- /tagall - Tag Semua orang ( Khusus Grup! )
- /kick - Untuk kick member di dalam grup
- /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
- /getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
- /asahotak - Untuk bermain asah otak
- /caklontong - Untuk bermain cak lontong
- /family100 - Untuk bermain family 100
- /siapakahaku - Untuk bermain siapa aku
- /susunkata - Untuk bermain susun kata
- /tebakbendera - Untuk bermain tebak bendera
- /tebakbendera2 - Untuk bermain tebak bendera 2
- /tebakgambar - Untuk bermain tebak gambar
- /tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
- /tebakkalimat - Untuk bermain tebak kalimat
- /tebakkata - Untuk bermain tebak kata
- /tebakkimia - Untuk bermain tebak kimia
- /tebaklirik - Untuk bermain tebak lirik
- /tebaktebakan - Untuk bermain tebak tebakan
- /tekateki - Untuk bermain teka-teki
- /leaderboard - Untuk melihat leaderboard
- /exit - Untuk keluar dari mode tebak kata`;
-
-        const privateMenu = `Halo *${pushName}*, menu saat ini adalah:
- /tugas - Cek tugas/quiz terbuka dari EdLink
- /jadwal - Melihat Jadwal Mingguan yang berada di EdLink
- /list - Melihat semua list yang telah berada di auto reminder
- /addList "Nama Mata Kuliah" <Zoom Link> <Jam> <Hari> - Untuk menambahkan jadwal ke database
- /delete - Untuk menghapus reminder
- /add - Untuk add member di dalam grup
- /tagall - Tag Semua orang ( Khusus Grup! )
- /kick - Untuk kick member di dalam grup
- /new "Nama Grup" - Untuk membuat grup baru dengan file txt yang berisi nomor telepon
- /getAllMember - Untuk mendapatkan semua anggota grup dan mengirimkannya sebagai file txt
- /asahotak - Untuk bermain asah otak
- /caklontong - Untuk bermain cak lontong
- /family100 - Untuk bermain family 100
- /siapakahaku - Untuk bermain siapa aku
- /susunkata - Untuk bermain susun kata
- /tebakbendera - Untuk bermain tebak bendera
- /tebakbendera2 - Untuk bermain tebak bendera 2
- /tebakgambar - Untuk bermain tebak gambar
- /tebakkabupaten - Untuk bermain tebak kabupaten <Error!>
- /tebakkalimat - Untuk bermain tebak kalimat
- /tebakkata - Untuk bermain tebak kata
- /tebakkimia - Untuk bermain tebak kimia
- /tebaklirik - Untuk bermain tebak lirik
- /tebaktebakan - Untuk bermain tebak tebakan
- /tekateki - Untuk bermain teka-teki
- /leaderboard - Untuk melihat leaderboard
- /exit - Untuk keluar dari mode tebak kata`;
-
-        const text = remoteJid.endsWith('@g.us') ? groupMenu : privateMenu;
-        // Only add mentions when in a group chat (participant present). In private chats
-        // `numberUser` equals `remoteJid` and we shouldn't include mentions.
-        const payload = { text };
+        const displayName = remoteJid.endsWith('@g.us') ? numberUser.split('@')[0] : pushName;
+        const menuText = generateMenu(displayName, remoteJid.endsWith('@g.us'));
+        
+        const payload = { text: menuText };
         if (remoteJid.endsWith('@g.us')) payload.mentions = [numberUser];
         await sock.sendMessage(remoteJid, payload, { quoted: m.messages[0] });
       }
@@ -277,6 +316,131 @@ async function connectToWhatsApp() {
 
       if (chatMessage === '/end') {
         await uploadManager.endSession(sock, chatId, numberUser);
+        return;
+      }
+
+      // === Handle /see command for view-once files ===
+      if (chatMessage === '/see') {
+        // Check if the message is a reply
+        if (!msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ Silakan reply pesan yang ingin dilihat (file sekali dilihat).' }, { quoted: msg });
+          return;
+        }
+
+        const originalQuotedMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+        let unwrappedMessage = originalQuotedMessage;
+        
+        // Unwrap view-once messages to detect type
+        if (originalQuotedMessage.viewOnceMessage) {
+          unwrappedMessage = originalQuotedMessage.viewOnceMessage.message;
+        } else if (originalQuotedMessage.viewOnceMessageV2) {
+          unwrappedMessage = originalQuotedMessage.viewOnceMessageV2.message;
+        }
+
+        if (!unwrappedMessage) {
+          await sock.sendMessage(remoteJid, { text: '❌ Gagal membaca pesan. Silakan coba lagi.' }, { quoted: msg });
+          return;
+        }
+        
+        // Check if quoted message has media (image, video, document, audio, etc.)
+        let mediaMessage = null;
+        let mediaType = null;
+        let fileName = null;
+        let mimeType = null;
+        let caption = null;
+
+        if (unwrappedMessage.imageMessage) {
+          mediaMessage = unwrappedMessage.imageMessage;
+          mediaType = 'image';
+          mimeType = mediaMessage.mimetype || 'image/jpeg';
+          caption = mediaMessage.caption;
+        } else if (unwrappedMessage.videoMessage) {
+          mediaMessage = unwrappedMessage.videoMessage;
+          mediaType = 'video';
+          mimeType = mediaMessage.mimetype || 'video/mp4';
+          caption = mediaMessage.caption;
+        } else if (unwrappedMessage.audioMessage) {
+          mediaMessage = unwrappedMessage.audioMessage;
+          mediaType = 'audio';
+          mimeType = mediaMessage.mimetype || 'audio/mpeg';
+          fileName = 'audio.mp3';
+        } else if (unwrappedMessage.documentMessage) {
+          mediaMessage = unwrappedMessage.documentMessage;
+          mediaType = 'document';
+          fileName = mediaMessage.filename || 'file';
+          mimeType = mediaMessage.mimetype || 'application/octet-stream';
+        } else if (unwrappedMessage.stickerMessage) {
+          mediaMessage = unwrappedMessage.stickerMessage;
+          mediaType = 'sticker';
+          mimeType = 'image/webp';
+        } else {
+          await sock.sendMessage(remoteJid, { text: '❌ Pesan yang di-reply bukan file media. Silakan reply file yang ingin dilihat.' }, { quoted: msg });
+          return;
+        }
+
+        try {
+          // Build proper message structure for downloadMediaMessage
+          const messageForDownload = {
+            message: {
+              [mediaType === 'image' ? 'imageMessage' : 
+               mediaType === 'video' ? 'videoMessage' : 
+               mediaType === 'audio' ? 'audioMessage' : 
+               mediaType === 'document' ? 'documentMessage' : 
+               mediaType === 'sticker' ? 'stickerMessage' : 'imageMessage']: mediaMessage
+            }
+          };
+
+          let buffer;
+          try {
+            buffer = await downloadMediaMessage(messageForDownload, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+          } catch (e) {
+            console.log('Download attempt 1 failed:', e.message);
+            // Fallback: try dengan message structure berbeda
+            try {
+              buffer = await downloadMediaMessage(messageForDownload, 'buffer');
+            } catch (e2) {
+              console.log('Download attempt 2 failed:', e2.message);
+              // Last resort: coba download dari unwrappedMessage langsung
+              try {
+                buffer = await downloadMediaMessage(unwrappedMessage, 'buffer');
+              } catch (e3) {
+                console.log('Download attempt 3 failed:', e3.message);
+                throw new Error('Tidak dapat mengunduh media: ' + e3.message);
+              }
+            }
+          }
+          
+          // Send back as regular file (non-view-once)
+          const messagePayload = {};
+          
+          if (mediaType === 'image') {
+            messagePayload.image = buffer;
+            if (caption) {
+              messagePayload.caption = caption;
+            }
+          } else if (mediaType === 'video') {
+            messagePayload.video = buffer;
+            if (caption) {
+              messagePayload.caption = caption;
+            }
+          } else if (mediaType === 'audio') {
+            messagePayload.audio = buffer;
+            messagePayload.mimetype = mimeType;
+            messagePayload.ptt = mediaMessage.ptt || false;
+          } else if (mediaType === 'document') {
+            messagePayload.document = buffer;
+            messagePayload.filename = fileName;
+            messagePayload.mimetype = mimeType;
+          } else if (mediaType === 'sticker') {
+            messagePayload.sticker = buffer;
+          }
+
+          await sock.sendMessage(remoteJid, messagePayload, { quoted: msg });
+          await sock.sendMessage(remoteJid, { text: '✅ File telah dikirim sebagai file biasa (tidak sekali dilihat lagi).' }, { quoted: msg });
+        } catch (error) {
+          console.error('Error downloading/sending view-once media:', error);
+          await sock.sendMessage(remoteJid, { text: `❌ Gagal mengunduh media: ${error.message}` }, { quoted: msg });
+        }
         return;
       }
 
