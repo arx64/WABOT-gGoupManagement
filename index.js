@@ -25,6 +25,7 @@ import { startEdlinkScheduler, stopEdlinkScheduler, fetchOpenAssignments } from 
 import uploadManager from './uploadManager.js';
 
 let sock;
+let qrDataURL = null;
 const activeGuess = new Map(); // userJid → { word }
 const userScores = {}; // userJid → skor
 const gameSessions = new Map(); // userJid → { game, jawaban, soal }
@@ -171,20 +172,20 @@ app.use(express.static(__dirname));
 // halaman viewer QR — auto refresh
 app.get('/qr', (req, res) => {
   if (isLoggedIn) {
-    return res.send('<h2>Bot sudah login. QR tidak tersedia lagi.</h2>');
+    return res.send('<h2>Bot sudah login.</h2>');
   }
 
   res.send(`
     <html>
+      <head>
+        <meta http-equiv="refresh" content="3">
+      </head>
       <body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;">
         <div style="text-align:center;color:white;">
-          <h2>Scan QR untuk Login WhatsApp</h2>
-          <img src="/qr_code.png?refresh=${Date.now()}" style="max-width:90vw;" />
-          <p style="color:gray;">Refresh otomatis setiap 3 detik…</p>
+          <h2>Scan QR WhatsApp</h2>
+          ${qrDataURL ? `<img src="${qrDataURL}" style="max-width:300px;" />` : `<p>Menunggu QR dari server...</p>`}
+          <p style="color:gray;">Auto refresh setiap 3 detik</p>
         </div>
-        <script>
-          setTimeout(() => location.reload(), 3000);
-        </script>
       </body>
     </html>
   `);
@@ -205,15 +206,17 @@ async function connectToWhatsApp() {
 
     console.log('📶 Status koneksi:', connection);
 
-
     if (update.qr && !isLoggedIn) {
-      console.log('🔳 QR diterima — akses di /qr !');
+      console.log('🔳 QR diterima — generate base64');
 
-      const qrPath = path.join(__dirname, 'qr_code.png');
+      QRCode.toDataURL(update.qr, (err, url) => {
+        if (err) {
+          console.error('Gagal generate QR:', err);
+          return;
+        }
 
-      QRCode.toFile(qrPath, update.qr, { width: 600, margin: 2 }, (err) => {
-        if (err) return console.error('Gagal membuat QR Code:', err);
-        console.log(`📁 QR diperbarui di: ${qrPath}`);
+        qrDataURL = url;
+        console.log('✅ QR updated (base64)');
       });
     }
 
@@ -223,13 +226,7 @@ async function connectToWhatsApp() {
     }
     if (connection === 'open') {
       isLoggedIn = true;
-
-      // hapus QR setelah connect
-      const qrPath = path.join(__dirname, 'qr_code.png');
-      if (fs.existsSync(qrPath)) {
-        fs.unlinkSync(qrPath);
-        console.log('🗑️ QR Code dihapus — tidak diperlukan lagi!');
-      }
+      qrDataURL = null; // reset QR
 
       console.log('✅ Terhubung ke WhatsApp!');
       // start scheduler when connection opens
@@ -242,6 +239,7 @@ async function connectToWhatsApp() {
       }
     }
     if (connection === 'close') {
+      qrDataURL = null; // reset QR
       const reason = lastDisconnect?.error?.output?.statusCode;
       console.log('❌ Koneksi tertutup. Alasan:', reason);
       if (reason !== DisconnectReason.loggedOut) {
