@@ -1,124 +1,190 @@
 import os
-import requests
 import time
+import ssl
+import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
-base_url = 'https://bokepindoh.pics/'
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36'
+# =========================
+# KONFIGURASI DASAR
+# =========================
+
+BASE_URL = 'https://bokepindoh.wtf/'
+HOSTNAME = 'bokepindoh.wtf'
+DEST_IP = '104.21.1.137'   # IP dari DevTools browser (Cloudflare)
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                  'AppleWebKit/537.36 (KHTML, like Gecko) '
+                  'Chrome/115.0.0.0 Safari/537.36'
 }
 
-# Folder tempat simpan video
-# save_folder = 'videos'
-# os.makedirs(save_folder, exist_ok=True)
+SAVE_FOLDER = 'videos'
+LINKS_FILE = 'links.txt'
+os.makedirs(SAVE_FOLDER, exist_ok=True)
 
-# Tambahkan di bagian atas
-LINKS_FILE = "links.txt"
+# =========================
+# ADAPTER DNS BYPASS
+# =========================
+
+class HostHeaderSSLAdapter(HTTPAdapter):
+    def __init__(self, dest_ip, hostname):
+        self.dest_ip = dest_ip
+        self.hostname = hostname
+        super().__init__()
+
+    def init_poolmanager(self, connections, maxsize, block=False):
+        context = ssl.create_default_context()
+        context.check_hostname = True
+        context.verify_mode = ssl.CERT_REQUIRED
+
+        self.poolmanager = PoolManager(
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            ssl_context=context,
+            server_hostname=self.hostname
+        )
+
+    def send(self, request, **kwargs):
+        request.url = request.url.replace(self.hostname, self.dest_ip)
+        request.headers['Host'] = self.hostname
+        return super().send(request, **kwargs)
+
+# =========================
+# SESSION GLOBAL
+# =========================
+
+session = requests.Session()
+session.headers.update(HEADERS)
+session.mount(
+    f'https://{HOSTNAME}',
+    HostHeaderSSLAdapter(DEST_IP, HOSTNAME)
+)
+
+# =========================
+# UTIL LINK TRACKING
+# =========================
 
 def load_existing_links():
     if os.path.exists(LINKS_FILE):
-        with open(LINKS_FILE, 'r') as f:
-            return set(line.strip() for line in f.readlines())
+        with open(LINKS_FILE, 'r', encoding='utf-8') as f:
+            return set(line.strip() for line in f)
     return set()
 
 def append_link_if_new(link, known_links):
-    if link not in known_links:
-        with open(LINKS_FILE, 'a') as f:
-            f.write(link + "\n")
+    if link and link not in known_links:
+        with open(LINKS_FILE, 'a', encoding='utf-8') as f:
+            f.write(link + '\n')
         known_links.add(link)
-        print(f"[+] Link baru disimpan: {link}")
+        print(f"[+] Link baru disimpan")
     else:
-        print(f"[=] Duplikat di-skip: {link}")
+        print(f"[=] Duplikat / kosong di-skip")
 
+# =========================
+# AMBIL VIDEO URL
+# =========================
 
 def get_video_url(detail_url):
     try:
-        resp = requests.get(detail_url, headers=headers, timeout=10)
+        resp = session.get(detail_url, timeout=15)
         if resp.status_code != 200:
             return None
 
         soup = BeautifulSoup(resp.text, 'html.parser')
 
-        # Cari tag <video>
-        video_tag = soup.find('video', src=True)
-        if video_tag:
-            return video_tag['src']
+        video = soup.find('video', src=True)
+        if video:
+            return video['src']
 
-        # Coba cari <iframe>
-        iframe_tag = soup.find('iframe', src=True)
-        if iframe_tag:
-            return iframe_tag['src']
+        iframe = soup.find('iframe', src=True)
+        if iframe:
+            return iframe['src']
 
         return None
-    except Exception:
+    except Exception as e:
+        print(f"[!] Error ambil video: {e}")
         return None
 
-# def download_video(video_url, filename):
-#     try:
-#         resp = requests.get(video_url, headers=headers, stream=True, timeout=15)
-#         if resp.status_code == 200:
-#             with open(os.path.join(save_folder, filename), 'wb') as f:
-#                 for chunk in resp.iter_content(1024*1024):
-#                     f.write(chunk)
-#             print(f"[✓] Video disimpan: {filename}")
-#         else:
-#             print(f"[!] Gagal download: {video_url}")
-#     except Exception as e:
-#         print(f"[!] Error saat download: {e}")
+# =========================
+# DOWNLOAD VIDEO
+# =========================
 
-def scrape_page(url, max_pages=3):
+def download_video(video_url, filename):
+    try:
+        resp = session.get(video_url, stream=True, timeout=30)
+        if resp.status_code == 200:
+            path = os.path.join(SAVE_FOLDER, filename)
+            with open(path, 'wb') as f:
+                for chunk in resp.iter_content(1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+            print(f"[✓] Video disimpan: {filename}")
+        else:
+            print(f"[!] Gagal download video")
+    except Exception as e:
+        print(f"[!] Error download: {e}")
+
+# =========================
+# SCRAPER UTAMA
+# =========================
+
+def scrape_page(start_url, max_pages=5):
     page = 1
-    known_links = load_existing_links()  # Load existing links to avoid duplicates
+    url = start_url
+    known_links = load_existing_links()
+
     while url and page <= max_pages:
         print(f"\n📄 Scraping halaman {page}: {url}")
-        resp = requests.get(url, headers=headers)
+
+        resp = session.get(url, timeout=15)
         if resp.status_code != 200:
-            print(f"Gagal mengakses {url}")
+            print("[!] Gagal akses halaman")
             break
 
         soup = BeautifulSoup(resp.text, 'html.parser')
         articles = soup.find_all('article')
 
         for i, article in enumerate(articles, 1):
-            a_tag = article.find('a', href=True, attrs={'data-title': True}) or \
-                    article.find('a', href=True, attrs={'title': True})
-            if not a_tag:
+            a = article.find('a', href=True)
+            if not a:
                 continue
 
-            title = a_tag.get('data-title') or a_tag.get('title')
-            link = a_tag['href']
+            title = a.get('data-title') or a.get('title') or 'no_title'
+            link = a['href']
 
-            # Durasi
             duration_tag = article.find('span', class_='duration')
-            duration = duration_tag.text.strip() if duration_tag else 'Durasi tidak ditemukan'
+            duration = duration_tag.text.strip() if duration_tag else '-'
 
-            # Ambil video
             video_url = get_video_url(link)
-            print(f"{i}. Judul   : {title}")
-            print(f"   Link    : {link}")
-            print(f"   Durasi  : {duration}")
-            print(f"   Video   : {video_url}")
+
+            print(f"{i}. Judul  : {title}")
+            print(f"   Link   : {link}")
+            print(f"   Durasi : {duration}")
+            print(f"   Video  : {video_url}")
+
             append_link_if_new(video_url, known_links)
 
-            # Download jika URL valid
-            # if video_url and video_url.endswith('.mp4'):
-            #     filename = f"{title[:50].replace(' ', '_').replace('|','')}.mp4"
-            #     download_video(video_url, filename)
-            # else:
-            #     print("   ⚠️ Video tidak bisa didownload.")
+            if video_url and video_url.endswith('.mp4'):
+                safe_title = title[:50].replace(' ', '_').replace('|', '')
+                download_video(video_url, f"{safe_title}.mp4")
+            else:
+                print("   ⚠️ Video tidak bisa diunduh")
 
             print('-' * 50)
 
-        # Cari link next page
-        next_link_tag = soup.find('a', string='Next')
-        if next_link_tag and next_link_tag.get('href'):
-            url = next_link_tag['href']
+        next_btn = soup.find('a', string='Next')
+        if next_btn and next_btn.get('href'):
+            url = next_btn['href']
             page += 1
+            print("⏳ Delay 60 detik...")
+            time.sleep(60)
         else:
             break
-        print("Delay 60s sebelum lanjut ke halaman berikutnya...")
-        time.sleep(60)  # Delay 60 detik sebelum lanjut ke halaman berikutnya
-        print(f"Berlanjut ke halaman {page}...")
 
-# Mulai scraping dan download
-scrape_page(base_url, max_pages=111)  # Ganti max_pages sesuai kebutuhan
+# =========================
+# START
+# =========================
+
+scrape_page(BASE_URL, max_pages=111)

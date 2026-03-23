@@ -77,11 +77,15 @@ export async function createGroupWithFile(sock, msg, chatMessage, senderJid) {
         let n = num.replace(/\D/g, '');
         if (n.startsWith('0')) n = '62' + n.slice(1);
         if (!n.startsWith('62')) return null;
+        if (n.length < 10 || n.length > 15) return null;
         return n + '@s.whatsapp.net';
       })
       .filter(Boolean);
 
-    if (!numbers.length) {
+    // Remove duplicates
+    const uniqueNumbers = [...new Set(numbers)];
+
+    if (!uniqueNumbers.length) {
       await sock.sendMessage(senderJid, { text: '❗ Tidak ditemukan nomor valid di file.' }, { quoted: msg });
       return;
     }
@@ -92,7 +96,8 @@ export async function createGroupWithFile(sock, msg, chatMessage, senderJid) {
     const groupName = chatMessage
       .replace(/^\/new\s+/i, '')
       .replace(/^["']|["']$/g, '')
-      .trim();
+      .trim()
+      .substring(0, 25); // Limit to 25 chars (WhatsApp limit)
 
     if (!groupName) {
       await sock.sendMessage(senderJid, { text: '❗ Nama grup tidak boleh kosong.' }, { quoted: msg });
@@ -102,8 +107,17 @@ export async function createGroupWithFile(sock, msg, chatMessage, senderJid) {
     /* =========================================================
      * 6. BUAT GRUP
      * ========================================================= */
-    const participants = [senderJid, ...numbers];
-    const group = await sock.groupCreate(groupName, participants);
+    const participants = [senderJid, ...uniqueNumbers];
+    
+    // Ensure valid JIDs
+    const validParticipants = participants.filter(p => p.includes('@s.whatsapp.net'));
+    
+    if (validParticipants.length < 2) {
+      await sock.sendMessage(senderJid, { text: '❗ Jumlah peserta minimal 2 orang.' }, { quoted: msg });
+      return;
+    }
+
+    const group = await sock.groupCreate(groupName, validParticipants);
 
     await sock.groupParticipantsUpdate(group.id, [senderJid], 'promote');
 

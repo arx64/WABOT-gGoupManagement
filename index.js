@@ -30,6 +30,34 @@ const userScores = {}; // userJid → skor
 const gameSessions = new Map(); // userJid → { game, jawaban, soal }
 const gameScores = {}; // userJid → { name, score }
 
+// Cache for view-once messages: chatJid → Array of { message, timestamp }
+const viewOnceCache = new Map();
+const MAX_CACHE_SIZE = 100; // Max messages per chat
+
+// Helper to add view-once message to cache
+function addToViewOnceCache(chatJid, message) {
+  if (!viewOnceCache.has(chatJid)) {
+    viewOnceCache.set(chatJid, []);
+  }
+  const cache = viewOnceCache.get(chatJid);
+  cache.push({
+    message: message,
+    timestamp: Date.now()
+  });
+  // Keep only recent messages
+  if (cache.length > MAX_CACHE_SIZE) {
+    cache.shift();
+  }
+}
+
+// Helper to find recent view-once message in cache
+function findRecentViewOnce(chatJid) {
+  const cache = viewOnceCache.get(chatJid);
+  if (!cache || cache.length === 0) return null;
+  // Return the most recent one
+  return cache[cache.length - 1].message;
+}
+
 // Fix ESM dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -241,7 +269,24 @@ async function connectToWhatsApp() {
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('messages.upsert', async (m) => {
-    if (m.messages[0].key.fromMe) return;
+    // if (m.messages[0].key.fromMe) return;
+    const msg = m.messages[0];
+    const isFromMe = msg.key.fromMe;
+
+    const message = msg.message?.conversation || msg.message?.extendedTextMessage?.text || msg.message?.imageMessage?.caption || msg.message?.documentMessage?.caption || '';
+
+    const isCommand = message.startsWith('/');
+
+    // ❗ Skip hanya jika pesan dari bot DAN BUKAN command
+    if (isFromMe && !isCommand) return;
+
+    // Cache view-once messages for /see command (outside try block to avoid hoisting issues)
+    const msgContent = msg.message;
+    if (msgContent && (msgContent.viewOnceMessage || msgContent.viewOnceMessageV2)) {
+      const remoteJidCache = msg.key.remoteJid;
+      addToViewOnceCache(remoteJidCache, msgContent);
+    }
+
     try {
       const pushName = m.messages[0].pushName;
       const numberUser = m.messages[0].key.participant || m.messages[0].key.remoteJid || m.messages[0].key.remoteJidAlt;
@@ -271,25 +316,26 @@ async function connectToWhatsApp() {
       //     break;
       // }
       
-      const msg = m.messages?.[0];
-      if (!msg || msg.key?.fromMe) return;
+      // msg already declared in outer scope (line 273)
+      // const msg = m.messages?.[0];
 
-      const message = msg.message;
-      if (!message) return;
+      // message already declared in outer scope (line 276)
+      // const message = msg.message;
+      if (!msg.message) return;
 
-      const chatMessage = message.conversation || message.extendedTextMessage?.text || message.imageMessage?.caption || message.videoMessage?.caption || message.documentMessage?.caption || '';
-
-      if (!chatMessage) return;
-
-
-      // If upload session active for this user, let uploadManager handle incoming media
+      // Extract text/caption from message (could be empty for pure media messages)
+      const chatMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || '';
+      
+      // IMPORTANT: Check upload session FIRST before returning on empty chatMessage
+      // because media files without caption will have empty chatMessage
       try {
         const handled = await uploadManager.handleIncomingMessage(msg, sock, { chatId, numberUser, pushName });
         if (handled) return;
       } catch (e) {
         console.error('uploadManager error:', e);
       }
-
+      
+      // Now safe to return if no text message and not handled by uploadManager
       if (!chatMessage) return;
 
       const sessionID = remoteJid;
@@ -321,20 +367,43 @@ async function connectToWhatsApp() {
 
       // === Handle /see command for view-once files ===
       if (chatMessage === '/see') {
-        // Check if the message is a reply
-        if (!msg.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
-          await sock.sendMessage(remoteJid, { text: '⚠️ Silakan reply pesan yang ingin dilihat (file sekali dilihat).' }, { quoted: msg });
-          return;
-        }
-
-        const originalQuotedMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage;
-        let unwrappedMessage = originalQuotedMessage;
+        let unwrappedMessage = null;
+        let originalQuotedMessage = null;
+        let targetMessage = null;
         
-        // Unwrap view-once messages to detect type
-        if (originalQuotedMessage.viewOnceMessage) {
-          unwrappedMessage = originalQuotedMessage.viewOnceMessage.message;
-        } else if (originalQuotedMessage.viewOnceMessageV2) {
-          unwrappedMessage = originalQuotedMessage.viewOnceMessageV2.message;
+        // Check if the message is a reply
+        const isReply = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        
+        if (isReply) {
+          // Mode 1: Using reply
+          originalQuotedMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+          targetMessage = originalQuotedMessage;
+          
+          // Unwrap view-once messages to detect type
+          if (originalQuotedMessage.viewOnceMessage) {
+            unwrappedMessage = originalQuotedMessage.viewOnceMessage.message;
+          } else if (originalQuotedMessage.viewOnceMessageV2) {
+            unwrappedMessage = originalQuotedMessage.viewOnceMessageV2.message;
+          } else {
+            unwrappedMessage = originalQuotedMessage;
+          }
+        } else {
+          // Mode 2: Auto-search recent view-once messages from cache
+          targetMessage = findRecentViewOnce(remoteJid);
+          
+          if (!targetMessage) {
+            await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ditemukan media view-once di cache.\n\n💡 Tips: Reply langsung ke pesan view-once lalu ketik /see' }, { quoted: msg });
+            return;
+          }
+          
+          // Unwrap view-once message
+          if (targetMessage.viewOnceMessage) {
+            unwrappedMessage = targetMessage.viewOnceMessage.message;
+          } else if (targetMessage.viewOnceMessageV2) {
+            unwrappedMessage = targetMessage.viewOnceMessageV2.message;
+          } else {
+            unwrappedMessage = targetMessage;
+          }
         }
 
         if (!unwrappedMessage) {
