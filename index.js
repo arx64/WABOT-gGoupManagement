@@ -35,6 +35,30 @@ const gameScores = {}; // userJid → { name, score }
 const viewOnceCache = new Map();
 const MAX_CACHE_SIZE = 100; // Max messages per chat
 
+// define target sender(s) for auto-detect auto-convert view-once
+const VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '').split(',').map((jid) => jid.trim()).filter(Boolean);
+
+function isAutoViewOnceSender(jid) {
+  if (!jid) return false;
+  const normalized = jid.split('@')[0]; // remove domain
+  return VIEW_ONCE_AUTO_SENDERS.some((target) => {
+    const normTarget = target.split('@')[0];
+    return normalized === normTarget;
+  });
+}
+
+// define target sender(s) for auto-view story
+const STORY_AUTO_SENDERS = (process.env.AUTO_VIEW_STORY_JIDS || process.env.AUTO_VIEW_ONCE_JIDS || '').split(',').map((jid) => jid.trim()).filter(Boolean);
+
+function isAutoStorySender(jid) {
+  if (!jid) return false;
+  const normalized = jid.split('@')[0]; // remove domain
+  return STORY_AUTO_SENDERS.some((target) => {
+    const normTarget = target.split('@')[0];
+    return normalized === normTarget;
+  });
+}
+
 // Helper to add view-once message to cache
 function addToViewOnceCache(chatJid, message) {
   if (!viewOnceCache.has(chatJid)) {
@@ -57,6 +81,110 @@ function findRecentViewOnce(chatJid) {
   if (!cache || cache.length === 0) return null;
   // Return the most recent one
   return cache[cache.length - 1].message;
+}
+
+async function autoSendViewOnceAsFile(sock, remoteJid, msg) {
+  try {
+    console.log('🔄 Auto-send view-once triggered for', remoteJid);
+    const msgContent = msg.message;
+    if (!msgContent || !(msgContent.viewOnceMessage || msgContent.viewOnceMessageV2)) {
+      console.log('❌ No view-once message found');
+      return false;
+    }
+
+    let unwrapped = null;
+    if (msgContent.viewOnceMessage) unwrapped = msgContent.viewOnceMessage.message;
+    else if (msgContent.viewOnceMessageV2) unwrapped = msgContent.viewOnceMessageV2.message;
+
+    if (!unwrapped) {
+      console.log('❌ Failed to unwrap view-once message');
+      return false;
+    }
+
+    let mediaMessage = null;
+    let mediaType = null;
+    let fileName = null;
+    let mimeType = null;
+    let caption = null;
+
+    if (unwrapped.imageMessage) {
+      mediaMessage = unwrapped.imageMessage;
+      mediaType = 'image';
+      mimeType = mediaMessage.mimetype || 'image/jpeg';
+      caption = mediaMessage.caption;
+    } else if (unwrapped.videoMessage) {
+      mediaMessage = unwrapped.videoMessage;
+      mediaType = 'video';
+      mimeType = mediaMessage.mimetype || 'video/mp4';
+      caption = mediaMessage.caption;
+    } else if (unwrapped.documentMessage) {
+      mediaMessage = unwrapped.documentMessage;
+      mediaType = 'document';
+      fileName = mediaMessage.filename || 'file';
+      mimeType = mediaMessage.mimetype || 'application/octet-stream';
+    } else if (unwrapped.audioMessage) {
+      mediaMessage = unwrapped.audioMessage;
+      mediaType = 'audio';
+      mimeType = mediaMessage.mimetype || 'audio/mpeg';
+      fileName = 'audio.mp3';
+    } else if (unwrapped.stickerMessage) {
+      mediaMessage = unwrapped.stickerMessage;
+      mediaType = 'sticker';
+      mimeType = 'image/webp';
+    } else {
+      console.log('❌ Unsupported media type in view-once');
+      return false;
+    }
+
+    const messageForDownload = { message: {} };
+    messageForDownload.message[`${mediaType}Message`] = mediaMessage;
+
+    let buffer;
+    try {
+      buffer = await downloadMediaMessage(messageForDownload, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
+    } catch (e) {
+      console.log('Download attempt 1 failed:', e.message);
+      try {
+        buffer = await downloadMediaMessage(messageForDownload, 'buffer');
+      } catch (e2) {
+        console.log('Download attempt 2 failed:', e2.message);
+        try {
+          buffer = await downloadMediaMessage(unwrapped, 'buffer');
+        } catch (e3) {
+          console.log('Download attempt 3 failed:', e3.message);
+          throw new Error('Tidak dapat mengunduh media: ' + e3.message);
+        }
+      }
+    }
+
+    const payload = {};
+    if (mediaType === 'image') {
+      payload.image = buffer;
+      if (caption) payload.caption = caption;
+    } else if (mediaType === 'video') {
+      payload.video = buffer;
+      if (caption) payload.caption = caption;
+    } else if (mediaType === 'document') {
+      payload.document = buffer;
+      payload.filename = fileName;
+      payload.mimetype = mimeType;
+    } else if (mediaType === 'audio') {
+      payload.audio = buffer;
+      payload.mimetype = mimeType;
+      payload.ptt = mediaMessage.ptt || false;
+    } else if (mediaType === 'sticker') {
+      payload.sticker = buffer;
+    }
+
+    await sock.sendMessage(remoteJid, payload, { quoted: msg });
+    await sock.sendMessage(remoteJid, { text: '✅ Auto-convert: view-once dikirim sebagai file biasa.' }, { quoted: msg });
+    console.log('✅ Auto-send view-once completed');
+    return true;
+  } catch (e) {
+    console.error('autoSendViewOnceAsFile error:', e);
+    await sock.sendMessage(remoteJid, { text: `❌ Gagal auto-convert view-once: ${e.message}` }, { quoted: msg });
+    return false;
+  }
 }
 
 // Fix ESM dirname
@@ -117,7 +245,9 @@ const MENU_CATEGORIES = {
     emoji: '📎',
     title: 'MEDIA & FILE',
     commands: [
-      { cmd: '/see', desc: 'Kirim file sekali dilihat sebagai file biasa (reply pesan)' }
+      { cmd: '/see', desc: 'Kirim file sekali dilihat sebagai file biasa (reply pesan)' },
+      { cmd: 'Auto View-Once', desc: 'Otomatis convert view-once dari nomor tertentu' },
+      { cmd: 'Auto View Story', desc: 'Otomatis view story dari nomor tertentu' }
     ]
   },
   games: {
@@ -201,12 +331,12 @@ async function connectToWhatsApp() {
   //   auth: state,
   // });
   // fetch latest WhatsApp version
-  const { version: waVersion } = await fetchLatestBaileysVersion();
+  // const { version: waVersion } = await fetchLatestBaileysVersion();
+  const { version, isLatest } = await fetchLatestBaileysVersion()
   const sock = makeWASocket({
     auth: state,
-    version: waVersion,
-    browser: ['Chrome', 'Windows', '110.0.5481.177'], // simulate real browser
-    logger: pino({ level: 'info' }),
+    version: version,
+    browser: ['Ipinn', 'Windows', '110.0.5481.177'], // simulate real browser
     connectTimeoutMs: 60_000,
     patchMessageBeforeSending: (msg) => msg,
   });
@@ -275,6 +405,27 @@ async function connectToWhatsApp() {
 
   sock.ev.on('creds.update', saveCreds);
 
+  // Auto view story for specified senders
+  sock.ev.on('status.upsert', async (statuses) => {
+    for (const status of statuses) {
+      try {
+        const senderJid = status.key.participant || status.key.remoteJid;
+        if (isAutoStorySender(senderJid)) {
+          console.log('🔄 Auto-viewing story from', senderJid);
+          // Mark status as read/viewed
+          await sock.readMessages([{
+            remoteJid: status.key.remoteJid,
+            id: status.key.id,
+            participant: status.key.participant
+          }]);
+          console.log('✅ Auto-viewed story from', senderJid);
+        }
+      } catch (e) {
+        console.error('Error auto-viewing story:', e);
+      }
+    }
+  });
+
   sock.ev.on('messages.upsert', async (m) => {
     // if (m.messages[0].key.fromMe) return;
     const msg = m.messages[0];
@@ -289,9 +440,15 @@ async function connectToWhatsApp() {
 
     // Cache view-once messages for /see command (outside try block to avoid hoisting issues)
     const msgContent = msg.message;
+    const remoteJidCache = msg.key.remoteJid;
     if (msgContent && (msgContent.viewOnceMessage || msgContent.viewOnceMessageV2)) {
-      const remoteJidCache = msg.key.remoteJid;
       addToViewOnceCache(remoteJidCache, msgContent);
+
+      const senderJid = msg.key.participant || remoteJidCache;
+      if (!isFromMe && isAutoViewOnceSender(senderJid)) {
+        await autoSendViewOnceAsFile(sock, remoteJidCache, msg);
+        // continue processing if desired; we can still handle commands if message also has text
+      }
     }
 
     try {
