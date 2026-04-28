@@ -21,8 +21,9 @@ import { addScore, getTopUsers } from './db/leaderboard.js';
 import gameHandlers from './games/gameHandlers.js';
 import { createNote, getNoteById, listNotes, deleteNote } from './notes.js';
 import { startScheduler, stopScheduler } from './scheduler.js';
-import { startEdlinkScheduler, stopEdlinkScheduler, fetchOpenAssignments } from './edlinkScheduler.js';
+import { startEdlinkScheduler, stopEdlinkScheduler, fetchOpenAssignments, fetchPresenceStatus, fetchAllPresenceStatus } from './edlinkScheduler.js';
 import uploadManager from './uploadManager.js';
+import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
 
 let sock;
 let qrDataURL = null;
@@ -35,11 +36,17 @@ const gameScores = {}; // userJid → { name, score }
 const viewOnceCache = new Map();
 const MAX_CACHE_SIZE = 100; // Max messages per chat
 
-// define target sender(s) for auto-detect auto-convert view-once
-const VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '').split(',').map((jid) => jid.trim()).filter(Boolean);
+// ===== AUTO VIEW-ONCE CONFIG =====
+// Format: AUTO_VIEW_ONCE_JIDS=6281234567890,6281234567891,6282988223456
+// Multiple numbers separated by comma
+const VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '')
+  .split(',')
+  .map((jid) => jid.trim())
+  .filter(Boolean);
 
 function isAutoViewOnceSender(jid) {
-  if (!jid) return false;
+  if (!jid || VIEW_ONCE_AUTO_SENDERS.length === 0) return false;
+  
   const normalized = jid.split('@')[0]; // remove domain
   return VIEW_ONCE_AUTO_SENDERS.some((target) => {
     const normTarget = target.split('@')[0];
@@ -47,11 +54,30 @@ function isAutoViewOnceSender(jid) {
   });
 }
 
-// define target sender(s) for auto-view story
-const STORY_AUTO_SENDERS = (process.env.AUTO_VIEW_STORY_JIDS || process.env.AUTO_VIEW_ONCE_JIDS || '').split(',').map((jid) => jid.trim()).filter(Boolean);
+// ===== AUTO VIEW STORY CONFIG =====
+// Format: 
+//   AUTO_VIEW_STORY_JIDS=*          (auto view ALL stories)
+//   AUTO_VIEW_STORY_JIDS=6281234567890,6281234567891  (specific numbers only)
+const STORY_AUTO_SENDERS_RAW = (process.env.AUTO_VIEW_STORY_JIDS || '')
+  .split(',')
+  .map((jid) => jid.trim())
+  .filter(Boolean);
+
+const STORY_VIEW_ALL = STORY_AUTO_SENDERS_RAW.includes('*');
+const STORY_AUTO_SENDERS = STORY_AUTO_SENDERS_RAW.filter((jid) => jid !== '*');
 
 function isAutoStorySender(jid) {
   if (!jid) return false;
+  
+  // Jika ada wildcard "*", auto view SEMUA story
+  if (STORY_VIEW_ALL) {
+    return true;
+  }
+  
+  // Jika tidak ada config sama sekali, return false
+  if (STORY_AUTO_SENDERS.length === 0) return false;
+  
+  // Check specific list
   const normalized = jid.split('@')[0]; // remove domain
   return STORY_AUTO_SENDERS.some((target) => {
     const normTarget = target.split('@')[0];
@@ -208,7 +234,8 @@ const MENU_CATEGORIES = {
     title: 'AKADEMIK',
     commands: [
       { cmd: '/tugas', desc: 'Cek tugas/quiz terbuka dari EdLink' },
-      { cmd: '/jadwal', desc: 'Lihat jadwal mingguan dari EdLink' }
+      { cmd: '/jadwal', desc: 'Lihat jadwal mingguan dari EdLink' },
+      { cmd: '/absen', desc: 'Cek absen dari EdLink' }
     ]
   },
   reminder: {
@@ -325,6 +352,28 @@ app.get('/qr', (req, res) => {
 app.listen(process.env.PORT || 3000, () => console.log('🌐 QR viewer: /qr'));
 
 async function connectToWhatsApp() {
+  // ===== LOG AUTO VIEW-ONCE & AUTO VIEW STORY CONFIG =====
+  console.log('\n' + '═'.repeat(60));
+  console.log('📱 AUTO VIEW CONFIGURATION:');
+  console.log('─'.repeat(60));
+  
+  if (process.env.AUTO_VIEW_ONCE_JIDS) {
+    console.log(`✅ AUTO VIEW-ONCE: ${VIEW_ONCE_AUTO_SENDERS.join(', ')}`);
+  } else {
+    console.log(`⏸️  AUTO VIEW-ONCE: disabled (set AUTO_VIEW_ONCE_JIDS in .env)`);
+  }
+  
+  if (STORY_VIEW_ALL) {
+    console.log(`✅ AUTO VIEW STORY: * (semua story)`);
+  } else if (process.env.AUTO_VIEW_STORY_JIDS && STORY_AUTO_SENDERS.length > 0) {
+    console.log(`✅ AUTO VIEW STORY: ${STORY_AUTO_SENDERS.join(', ')}`);
+  } else {
+    console.log(`⏸️  AUTO VIEW STORY: disabled (set AUTO_VIEW_STORY_JIDS in .env)`);
+  }
+  
+  console.log('═'.repeat(60) + '\n');
+  // ========================================
+
   const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
 
   // sock = makeWASocket({
@@ -405,29 +454,7 @@ async function connectToWhatsApp() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Auto view story for specified senders
-  sock.ev.on('status.upsert', async (statuses) => {
-    for (const status of statuses) {
-      try {
-        const senderJid = status.key.participant || status.key.remoteJid;
-        if (isAutoStorySender(senderJid)) {
-          console.log('🔄 Auto-viewing story from', senderJid);
-          // Mark status as read/viewed
-          await sock.readMessages([{
-            remoteJid: status.key.remoteJid,
-            id: status.key.id,
-            participant: status.key.participant
-          }]);
-          console.log('✅ Auto-viewed story from', senderJid);
-        }
-      } catch (e) {
-        console.error('Error auto-viewing story:', e);
-      }
-    }
-  });
-
   sock.ev.on('messages.upsert', async (m) => {
-    // if (m.messages[0].key.fromMe) return;
     const msg = m.messages[0];
     const isFromMe = msg.key.fromMe;
 
@@ -438,6 +465,21 @@ async function connectToWhatsApp() {
     // ❗ Skip hanya jika pesan dari bot DAN BUKAN command
     if (isFromMe && !isCommand) return;
 
+    // Auto view story detection for status broadcast messages
+    const isStatusBroadcast = msg.key.remoteJid === 'status@broadcast';
+    if (!isFromMe && isStatusBroadcast) {
+      const senderJid = msg.key.participant;
+      if (isAutoStorySender(senderJid)) {
+        try {
+          console.log('🔄 Auto-viewing story from', senderJid);
+          await sock.readMessages([msg.key]);
+          console.log('✅ Auto-viewed story from', senderJid);
+        } catch (e) {
+          console.error('Error auto-viewing story:', e);
+        }
+      }
+    }
+
     // Cache view-once messages for /see command (outside try block to avoid hoisting issues)
     const msgContent = msg.message;
     const remoteJidCache = msg.key.remoteJid;
@@ -446,9 +488,19 @@ async function connectToWhatsApp() {
 
       const senderJid = msg.key.participant || remoteJidCache;
       if (!isFromMe && isAutoViewOnceSender(senderJid)) {
-        await autoSendViewOnceAsFile(sock, remoteJidCache, msg);
+        try {
+          console.log('🔄 Auto-send view-once triggered for', senderJid, 'in', remoteJidCache);
+          await autoSendViewOnceAsFile(sock, remoteJidCache, msg);
+        } catch (e) {
+          console.error('Error auto-sending view-once:', e);
+        }
         // continue processing if desired; we can still handle commands if message also has text
       }
+    }
+
+    // ===== CACHE ALL MESSAGES FOR DELETED MESSAGE DETECTION =====
+    if (!isFromMe && msg.key.id) {
+      cacheMessage(remoteJidCache, msg.key.id, msg);
     }
 
     try {
@@ -725,6 +777,34 @@ async function connectToWhatsApp() {
         } catch (err) {
           console.error('Error fetching tugas:', err);
           await sock.sendMessage(remoteJid, { text: 'Gagal mengambil data tugas dari EdLink.' }, { quoted: m.messages[0] });
+        }
+      }
+
+      if (chatMessage.startsWith('/absen')) {
+        try {
+          const bearer = process.env.EDLINK_BEARER;
+          const data = await fetchAllPresenceStatus({ bearer });
+          if (!data || data.length === 0) {
+            await sock.sendMessage(remoteJid, { text: 'Tidak ada data absen yang ditemukan.' }, { quoted: m.messages[0] });
+            return;
+          }
+
+          const lines = data.map((item) => {
+            const groupId = item.groupId || item.group?.id || item.group?.groupId || '';
+            const classUrl = groupId ? `https://edlink.id/panel/classes/${groupId}/` : 'https://edlink.id/panel/classes/';
+            const presenceTotal = item.presenceTotal ?? item.presenceCount ?? 0;
+            const finishedSection = item.finishedSection ?? item.finishedCount ?? 0;
+            const totalSection = item.totalSection ?? item.total ?? 0;
+            const name = item.name || 'Unknown';
+            return `• Mata Kuliah: ${name}\n${classUrl}\n${presenceTotal}/${finishedSection} dari ${totalSection}`;
+          });
+
+          const out = `📝 *Status Absen EdLink:*
+\n${lines.join('\n\n')}`;
+          await sock.sendMessage(remoteJid, { text: out }, { quoted: m.messages[0] });
+        } catch (err) {
+          console.error('Error fetching absen:', err);
+          await sock.sendMessage(remoteJid, { text: 'Gagal mengambil data absen dari EdLink.' }, { quoted: m.messages[0] });
         }
       }
 
@@ -1575,6 +1655,62 @@ ${soal.soal}`,
       }
     } catch (error) {
       console.error('Error handling incoming message:', error);
+    }
+  });
+
+  // ===== HANDLE DELETED/REVOKED MESSAGES =====
+  sock.ev.on('messages.update', async (m) => {
+    try {
+      for (const { key, update } of m) {
+        // Deteksi apakah pesan direvoke (dihapus)
+        // Dalam Baileys, revoked message ditunjukkan dengan:
+        // 1. update.message === null (pesan field menjadi null)
+        // 2. update.messageStubType === 21 atau 22 (message stub types for delete)
+        // 3. update.messageStubArguments mengindikasikan penghapusan
+        
+        const isDeletedByUser = update.message === null || 
+                                update.messageStubType === 21 || 
+                                update.messageStubType === 22 ||
+                                (update.messageStubType && update.messageStubArguments);
+        
+        if (isDeletedByUser) {
+          try {
+            const { remoteJid, id: messageId } = key;
+            const isFromMe = key.fromMe;
+            
+            // Hanya proses pesan dari orang lain (bukan bot)
+            if (isFromMe) continue;
+            
+            // Ambil data pesan dari cache
+            const cachedData = getCachedMessage(remoteJid, messageId);
+            
+            if (cachedData) {
+              const notification = createDeletedMessageNotification(cachedData, remoteJid);
+              
+              // Siapkan mention jika grup
+              const isGroup = remoteJid.endsWith('@g.us');
+              const payload = { text: notification };
+              
+              if (isGroup) {
+                // Mention pengirim asli di group
+                const senderJid = cachedData.senderJid;
+                payload.mentions = [senderJid];
+              }
+              
+              // Kirim notifikasi ke chat
+              await sock.sendMessage(remoteJid, payload);
+              
+              console.log(`✅ Pesan dihapus terdeteksi dan dilaporkan di ${remoteJid}`);
+            } else {
+              console.log(`⚠️ Pesan dihapus terdeteksi (${messageId}) tapi data tidak ditemukan di cache`);
+            }
+          } catch (err) {
+            console.error('Error processing revoked message:', err);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error in messages.update handler:', error);
     }
   });
 }
