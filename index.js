@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 
 import 'dotenv/config';
+import dotenv from 'dotenv';
 import QRCode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -36,10 +37,17 @@ const gameScores = {}; // userJid → { name, score }
 const viewOnceCache = new Map();
 const MAX_CACHE_SIZE = 100; // Max messages per chat
 
+// ===== DELETED MESSAGE DETECTION CONFIG =====
+// Set DELETED_MESSAGE_DETECTION=false di .env untuk menonaktifkan
+let DELETED_MESSAGE_DETECTION = process.env.DELETED_MESSAGE_DETECTION !== 'false';
+
+// ===== OWNER CONFIG =====
+let OWNER_NUMBER = process.env.OWNER_NUMBER || '';
+
 // ===== AUTO VIEW-ONCE CONFIG =====
 // Format: AUTO_VIEW_ONCE_JIDS=6281234567890,6281234567891,6282988223456
 // Multiple numbers separated by comma
-const VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '')
+let VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '')
   .split(',')
   .map((jid) => jid.trim())
   .filter(Boolean);
@@ -58,13 +66,13 @@ function isAutoViewOnceSender(jid) {
 // Format: 
 //   AUTO_VIEW_STORY_JIDS=*          (auto view ALL stories)
 //   AUTO_VIEW_STORY_JIDS=6281234567890,6281234567891  (specific numbers only)
-const STORY_AUTO_SENDERS_RAW = (process.env.AUTO_VIEW_STORY_JIDS || '')
+let STORY_AUTO_SENDERS_RAW = (process.env.AUTO_VIEW_STORY_JIDS || '')
   .split(',')
   .map((jid) => jid.trim())
   .filter(Boolean);
 
-const STORY_VIEW_ALL = STORY_AUTO_SENDERS_RAW.includes('*');
-const STORY_AUTO_SENDERS = STORY_AUTO_SENDERS_RAW.filter((jid) => jid !== '*');
+let STORY_VIEW_ALL = STORY_AUTO_SENDERS_RAW.includes('*');
+let STORY_AUTO_SENDERS = STORY_AUTO_SENDERS_RAW.filter((jid) => jid !== '*');
 
 function isAutoStorySender(jid) {
   if (!jid) return false;
@@ -83,6 +91,50 @@ function isAutoStorySender(jid) {
     const normTarget = target.split('@')[0];
     return normalized === normTarget;
   });
+}
+
+// ===== RELOAD ENV CONFIG =====
+function reloadEnvConfig() {
+  try {
+    const envFile = fs.readFileSync(ENV_PATH, 'utf-8');
+    const parsed = dotenv.parse(envFile);
+    for (const [key, value] of Object.entries(parsed)) {
+      process.env[key] = value;
+    }
+    DELETED_MESSAGE_DETECTION = process.env.DELETED_MESSAGE_DETECTION !== 'false';
+    VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '')
+      .split(',')
+      .map((jid) => jid.trim())
+      .filter(Boolean);
+    STORY_AUTO_SENDERS_RAW = (process.env.AUTO_VIEW_STORY_JIDS || '')
+      .split(',')
+      .map((jid) => jid.trim())
+      .filter(Boolean);
+    STORY_VIEW_ALL = STORY_AUTO_SENDERS_RAW.includes('*');
+    STORY_AUTO_SENDERS = STORY_AUTO_SENDERS_RAW.filter((jid) => jid !== '*');
+    OWNER_NUMBER = process.env.OWNER_NUMBER || '';
+    console.log('🔄 Konfigurasi .env berhasil di-reload');
+    return true;
+  } catch (e) {
+    console.error('Gagal reload .env:', e);
+    return false;
+  }
+}
+
+// ===== MASK SENSITIVE ENV VALUE =====
+function maskSensitiveValue(key, value) {
+  const sensitiveKeys = ['BEARER', 'SECRET', 'TOKEN', 'PASSWORD', 'KEY', 'CLIENT_ID', 'CLIENT_SECRET'];
+  const isSensitive = sensitiveKeys.some(sk => key.includes(sk));
+  if (!isSensitive || value.length <= 4) return value;
+  return value.slice(0, 4) + '*'.repeat(Math.max(value.length - 8, 3)) + value.slice(-4);
+}
+
+// ===== IS OWNER CHECK =====
+function isOwner(jid) {
+  if (!process.env.OWNER_NUMBER || !jid) return false;
+  const number = jid.split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
+  const owner = process.env.OWNER_NUMBER.replace(/[^0-9]/g, '');
+  return number === owner;
 }
 
 // Helper to add view-once message to cache
@@ -216,6 +268,7 @@ async function autoSendViewOnceAsFile(sock, remoteJid, msg) {
 // Fix ESM dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const ENV_PATH = path.join(__dirname, '.env');
 
 // persistent auth handled by useMultiFileAuthState; no manual pairing request
 let isLoggedIn = false;
@@ -275,6 +328,15 @@ const MENU_CATEGORIES = {
       { cmd: '/see', desc: 'Kirim file sekali dilihat sebagai file biasa (reply pesan)' },
       { cmd: 'Auto View-Once', desc: 'Otomatis convert view-once dari nomor tertentu' },
       { cmd: 'Auto View Story', desc: 'Otomatis view story dari nomor tertentu' }
+    ]
+  },
+  owner: {
+    emoji: '🔐',
+    title: 'OWNER ONLY',
+    commands: [
+      { cmd: '/rahasia', desc: 'Lihat/edit konfigurasi .env via WhatsApp' },
+      { cmd: '/rahasia set KEY=VALUE', desc: 'Ubah nilai konfigurasi (langsung aktif)' },
+      { cmd: '/rahasia get KEY', desc: 'Lihat nilai konfigurasi tertentu' }
     ]
   },
   games: {
@@ -370,6 +432,9 @@ async function connectToWhatsApp() {
   } else {
     console.log(`⏸️  AUTO VIEW STORY: disabled (set AUTO_VIEW_STORY_JIDS in .env)`);
   }
+  
+  console.log(`📝 DELETED MESSAGE: ${DELETED_MESSAGE_DETECTION ? '✅ Aktif' : '⏸️  Nonaktif'}`);
+  console.log(`🔐 OWNER NUMBER: ${OWNER_NUMBER ? `✅ ${OWNER_NUMBER}` : '⏸️  Tidak diset'}`);
   
   console.log('═'.repeat(60) + '\n');
   // ========================================
@@ -482,12 +547,32 @@ async function connectToWhatsApp() {
 
     // Cache view-once messages for /see command (outside try block to avoid hoisting issues)
     const msgContent = msg.message;
+    if (msgContent && Object.keys(msgContent).length > 0 && !isFromMe) {
+      console.log('📨 msg.message keys:', Object.keys(msgContent));
+    }
     const remoteJidCache = msg.key.remoteJid;
     if (msgContent && (msgContent.viewOnceMessage || msgContent.viewOnceMessageV2)) {
+      console.log('🔍 View-once detected:', JSON.stringify({
+        msgContentKeys: Object.keys(msgContent),
+        remoteJid: remoteJidCache,
+        remoteJidAlt: msg.key.remoteJidAlt,
+        participant: msg.key.participant,
+        participantAlt: msg.key.participantAlt,
+        isFromMe,
+        configuredSenders: AUTO_VIEW_ONCE_SENDERS
+      }));
       addToViewOnceCache(remoteJidCache, msgContent);
 
       const senderJid = msg.key.participant || remoteJidCache;
-      if (!isFromMe && isAutoViewOnceSender(senderJid)) {
+      const senderJidAlt = msg.key.participantAlt || (remoteJidCache.endsWith('@g.us') ? undefined : msg.key.remoteJidAlt);
+      console.log('🔍 Auto-send check:', JSON.stringify({
+        senderJid: senderJid?.split('@')[0],
+        senderJidAlt: senderJidAlt?.split('@')[0],
+        isAutoViewOnceSender_primary: senderJid ? isAutoViewOnceSender(senderJid) : false,
+        isAutoViewOnceSender_alt: senderJidAlt ? isAutoViewOnceSender(senderJidAlt) : false,
+        remoteJidCache
+      }));
+      if (!isFromMe && (isAutoViewOnceSender(senderJid) || (senderJidAlt && isAutoViewOnceSender(senderJidAlt)))) {
         try {
           console.log('🔄 Auto-send view-once triggered for', senderJid, 'in', remoteJidCache);
           await autoSendViewOnceAsFile(sock, remoteJidCache, msg);
@@ -499,20 +584,23 @@ async function connectToWhatsApp() {
     }
 
     // ===== CACHE ALL MESSAGES FOR DELETED MESSAGE DETECTION =====
-    if (!isFromMe && msg.key.id) {
+    if (DELETED_MESSAGE_DETECTION && !isFromMe && msg.key.id) {
       cacheMessage(remoteJidCache, msg.key.id, msg);
     }
 
     try {
       const pushName = m.messages[0].pushName;
-      const numberUser = m.messages[0].key.participant || m.messages[0].key.remoteJid || m.messages[0].key.remoteJidAlt;
+      const msgKey = m.messages[0].key;
 
       // const message = m.messages[0].message;
       // const msg = m.messages[0];
       const messageArr = m.messages[0];
       const remoteJid = m.messages[0].key.remoteJid;
-      const chatId = remoteJid.endsWith('@g.us') ? remoteJid : numberUser;
       const isGroup = remoteJid.endsWith('@g.us');
+      const numberUser = isGroup
+        ? (msgKey.participant || m.messages[0].participant || msgKey.remoteJid)
+        : (msgKey.participant || msgKey.remoteJid || m.messages[0].key.remoteJidAlt || '');
+      const chatId = isGroup ? remoteJid : numberUser;
       const sessionKey = isGroup ? remoteJid : numberUser;
 
       // let chatMessage;
@@ -563,6 +651,128 @@ async function connectToWhatsApp() {
         const payload = { text: menuText };
         if (remoteJid.endsWith('@g.us')) payload.mentions = [numberUser];
         await sock.sendMessage(remoteJid, payload, { quoted: m.messages[0] });
+      }
+
+      // === /rahasia command (owner only, private chat only) ===
+      if (chatMessage.startsWith('/rahasia')) {
+        if (remoteJid.endsWith('@g.us')) {
+          await sock.sendMessage(remoteJid, { text: '❌ Perintah /rahasia hanya bisa digunakan di chat pribadi dengan bot, bukan di grup.' }, { quoted: m.messages[0] });
+          return;
+        }
+        // Di private chat, remoteJid = pengirim (bisa LID atau PN).
+        // Coba semua alternatif JID (LID vs PN) untuk owner check.
+        try {
+          const raw = fs.readFileSync(ENV_PATH, 'utf-8');
+          const parsed = dotenv.parse(raw);
+          const fileOwner = (parsed.OWNER_NUMBER || '').replace(/[^0-9]/g, '');
+
+          const jidCandidates = [
+            remoteJid,
+            m.messages[0].key.remoteJidAlt,
+            m.messages[0].key.participant,
+            m.messages[0].key.participantAlt,
+          ].filter(Boolean);
+
+          const senderNums = [...new Set(jidCandidates.map(j =>
+            j.split('@')[0].split(':')[0].replace(/[^0-9]/g, '')
+          ))];
+
+          console.log(`🔐 /rahasia cek: sender=${senderNums.join('|')}, OWNER_NUMBER(file)=${fileOwner || '(kosong)'}, remoteJid=${remoteJid}, alt=${m.messages[0].key.remoteJidAlt || '-'}`);
+
+          const isMatch = fileOwner && senderNums.some(n => n === fileOwner);
+          if (!isMatch) {
+            await sock.sendMessage(remoteJid, { text: '❌ Perintah ini hanya untuk pemilik bot.' }, { quoted: m.messages[0] });
+            return;
+          }
+          // Sync ke runtime
+          reloadEnvConfig();
+        } catch (e) {
+          await sock.sendMessage(remoteJid, { text: '❌ Gagal membaca konfigurasi.' }, { quoted: m.messages[0] });
+          console.error('Gagal baca .env untuk /rahasia:', e);
+          return;
+        }
+
+        const args = chatMessage.slice(9).trim();
+
+        // /rahasia — show all .env content
+        if (!args) {
+          try {
+            const envFile = fs.readFileSync(ENV_PATH, 'utf-8');
+            const lines = envFile.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+            let msgText = '🔐 *Konfigurasi .env:*\n\n';
+            for (const line of lines) {
+              const eqIdx = line.indexOf('=');
+              if (eqIdx === -1) {
+                msgText += `${line}\n`;
+                continue;
+              }
+              const key = line.slice(0, eqIdx);
+              const val = line.slice(eqIdx + 1);
+              const masked = maskSensitiveValue(key, val);
+              msgText += `• ${key}=${masked}\n`;
+            }
+            await sock.sendMessage(remoteJid, { text: msgText }, { quoted: m.messages[0] });
+          } catch (e) {
+            await sock.sendMessage(remoteJid, { text: `❌ Gagal membaca .env: ${e.message}` }, { quoted: m.messages[0] });
+          }
+          return;
+        }
+
+        // /rahasia set KEY=VALUE
+        if (args.startsWith('set ')) {
+          const setArg = args.slice(4).trim();
+          const eqIdx = setArg.indexOf('=');
+          if (eqIdx === -1) {
+            await sock.sendMessage(remoteJid, { text: '❌ Format: /rahasia set KEY=VALUE' }, { quoted: m.messages[0] });
+            return;
+          }
+          const key = setArg.slice(0, eqIdx).trim().toUpperCase();
+          const value = setArg.slice(eqIdx + 1).trim();
+          if (!key) {
+            await sock.sendMessage(remoteJid, { text: '❌ KEY tidak boleh kosong' }, { quoted: m.messages[0] });
+            return;
+          }
+
+          try {
+            let envFile = fs.readFileSync(ENV_PATH, 'utf-8');
+            const regex = new RegExp(`^${key}=.*$`, 'm');
+            if (regex.test(envFile)) {
+              envFile = envFile.replace(regex, `${key}=${value}`);
+            } else {
+              envFile += `\n${key}=${value}`;
+            }
+            fs.writeFileSync(ENV_PATH, envFile, 'utf-8');
+
+            if (reloadEnvConfig()) {
+              await sock.sendMessage(remoteJid, { text: `✅ *${key}* berhasil diubah menjadi:\n\`\`\`${maskSensitiveValue(key, value)}\`\`\`\n\n🔄 Konfigurasi sudah langsung aktif tanpa restart.` }, { quoted: m.messages[0] });
+            } else {
+              await sock.sendMessage(remoteJid, { text: `⚠️ File .env sudah diupdate, tapi gagal me-reload konfigurasi. Restart bot diperlukan.` }, { quoted: m.messages[0] });
+            }
+          } catch (e) {
+            await sock.sendMessage(remoteJid, { text: `❌ Gagal mengupdate .env: ${e.message}` }, { quoted: m.messages[0] });
+          }
+          return;
+        }
+
+        // /rahasia get KEY
+        if (args.startsWith('get ')) {
+          const key = args.slice(4).trim().toUpperCase();
+          if (!key) {
+            await sock.sendMessage(remoteJid, { text: '❌ Format: /rahasia get KEY' }, { quoted: m.messages[0] });
+            return;
+          }
+          const val = process.env[key];
+          if (val === undefined) {
+            await sock.sendMessage(remoteJid, { text: `❌ *${key}* tidak ditemukan di .env` }, { quoted: m.messages[0] });
+          } else {
+            await sock.sendMessage(remoteJid, { text: `🔑 *${key}*=\`\`\`${maskSensitiveValue(key, val)}\`\`\`` }, { quoted: m.messages[0] });
+          }
+          return;
+        }
+
+        // Unknown subcommand
+        await sock.sendMessage(remoteJid, { text: '🔐 *Perintah /rahasia:*\n\n/rahasia — Lihat semua konfigurasi\n/rahasia get KEY — Lihat nilai KEY\n/rahasia set KEY=VALUE — Ubah nilai KEY\n\n💡 Perubahan langsung aktif tanpa restart.' }, { quoted: m.messages[0] });
+        return;
       }
 
       // === Upload feature ===
@@ -784,26 +994,52 @@ async function connectToWhatsApp() {
         try {
           const bearer = process.env.EDLINK_BEARER;
           const data = await fetchAllPresenceStatus({ bearer });
+
           if (!data || data.length === 0) {
             await sock.sendMessage(remoteJid, { text: 'Tidak ada data absen yang ditemukan.' }, { quoted: m.messages[0] });
             return;
           }
 
-          const lines = data.map((item) => {
+          const progressBar = (current, total) => {
+            const size = 10;
+
+            if (!total || total <= 0) {
+              return '░'.repeat(size);
+            }
+
+            const filled = Math.round((current / total) * size);
+
+            return '▓'.repeat(filled) + '░'.repeat(size - filled);
+          };
+
+          const lines = data.map((item, index) => {
             const groupId = item.groupId || item.group?.id || item.group?.groupId || '';
+
             const classUrl = groupId ? `https://edlink.id/panel/classes/${groupId}/` : 'https://edlink.id/panel/classes/';
+
             const presenceTotal = item.presenceTotal ?? item.presenceCount ?? 0;
+
             const finishedSection = item.finishedSection ?? item.finishedCount ?? 0;
+
             const totalSection = item.totalSection ?? item.total ?? 0;
+
             const name = item.name || 'Unknown';
-            return `• Mata Kuliah: ${name}\n${classUrl}\n${presenceTotal}/${finishedSection} dari ${totalSection}`;
+
+            const progress = progressBar(finishedSection, totalSection);
+
+            const percentage = totalSection > 0 ? Math.round((finishedSection / totalSection) * 100) : 0;
+
+            const status = percentage >= 100 ? '✅ Lengkap' : percentage >= 75 ? '🟡 Hampir Selesai' : '🔴 Masih Banyak';
+
+            return `📚 *${index + 1}. ${name}*\n` + `┣ ${progress} ${percentage}%\n` + `┣ 📖 ${finishedSection}/${totalSection} Pertemuan\n` + `┣ 👥 Kehadiran: ${presenceTotal}\n` + `┣ 📌 ${status}\n` + `┗ 🔗 ${classUrl}`;
           });
 
-          const out = `📝 *Status Absen EdLink:*
-\n${lines.join('\n\n')}`;
+          const out = `📝 *STATUS ABSEN EDLINK*\n` + `━━━━━━━━━━━━━━━\n\n` + lines.join('\n\n') + `\n\n━━━━━━━━━━━━━━━\n` + `📅 Update: ${new Date().toLocaleString('id-ID')}`;
+
           await sock.sendMessage(remoteJid, { text: out }, { quoted: m.messages[0] });
         } catch (err) {
           console.error('Error fetching absen:', err);
+
           await sock.sendMessage(remoteJid, { text: 'Gagal mengambil data absen dari EdLink.' }, { quoted: m.messages[0] });
         }
       }
@@ -1660,6 +1896,7 @@ ${soal.soal}`,
 
   // ===== HANDLE DELETED/REVOKED MESSAGES =====
   sock.ev.on('messages.update', async (m) => {
+    if (!DELETED_MESSAGE_DETECTION) return;
     try {
       for (const { key, update } of m) {
         // Deteksi apakah pesan direvoke (dihapus)

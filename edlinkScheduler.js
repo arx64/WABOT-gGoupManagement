@@ -176,42 +176,77 @@ export async function fetchAllPresenceStatus(opts = {}) {
   const bearer = process.env.EDLINK_BEARER || opts.bearer;
   if (!bearer) throw new Error('EDLINK_BEARER not configured');
 
+  // Fetch user profile to get correct university_user_id
+  let universityUserId = null;
+
+  try {
+    const userRes = await fetch('https://api.edlink.id/api/v1.4/user/profile', {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${bearer}`,
+        accept: 'application/json, text/plain, */*',
+        'x-app-locale': 'id',
+      },
+    });
+
+    if (userRes.ok) {
+      const userPayload = await userRes.json();
+      universityUserId = userPayload?.data?.id || userPayload?.data?.universityUserId;
+    }
+  } catch (err) {
+    console.warn('Could not fetch user profile:', err.message);
+  }
+
   // First fetch: get academic groups
   const academicRes = await fetch('https://api.edlink.id/api/v1.4/group/academic?with_inactive=1', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${bearer}`,
-      'accept': 'application/json, text/plain, */*',
+      Authorization: `Bearer ${bearer}`,
+      accept: 'application/json, text/plain, */*',
       'x-app-locale': 'id',
       'x-referer': 'https://edlink.id/classes',
-      'referer': 'https://edlink.id/',
+      referer: 'https://edlink.id/',
       'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
       'cache-control': 'no-cache',
-      'pragma': 'no-cache',
-      'priority': 'u=1, i',
+      pragma: 'no-cache',
+      priority: 'u=1, i',
       'sec-ch-ua': '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"',
       'sec-fetch-dest': 'empty',
       'sec-fetch-mode': 'cors',
-      'sec-fetch-site': 'same-site'
+      'sec-fetch-site': 'same-site',
     },
     body: JSON.stringify({
-      "university_user_id": 1865853,
-      "dataProvider": {
-        "criterion": [
-          {"operator": "EQ", "value": "20252", "criteria": "periode"},
-          {"operator": "LK", "value": "", "criteria": "keyword", "custom": true},
-          {"operator": "EQ", "value": "", "criteria": "year", "custom": true}
+      university_user_id: universityUserId,
+      dataProvider: JSON.stringify({
+        criterion: [
+          {
+            operator: 'EQ',
+            value: '20252',
+            criteria: 'periode',
+          },
+          {
+            operator: 'LK',
+            value: '',
+            criteria: 'keyword',
+            custom: true,
+          },
+          {
+            operator: 'EQ',
+            value: '',
+            criteria: 'year',
+            custom: true,
+          },
         ],
-        "page": {"count": 1, "current": 1, "limit": 10, "next": -1, "previous": -1, "total": 0, "last_page": 1},
-        "sort": [
-          {"criteria": "status", "order": "asc"},
-          {"criteria": "id", "order": "desc"}
-        ]
-      }
-    })
+        page: {
+          current: 1,
+        },
+        sort: [],
+      }),
+    }),
   });
 
   if (!academicRes.ok) {
@@ -220,8 +255,20 @@ export async function fetchAllPresenceStatus(opts = {}) {
   }
 
   const academicPayload = await academicRes.json();
-  const academicData = academicPayload?.data || [];
-  const groupMemberIds = academicData.map(item => item.id).filter(id => id);
+  const academicData = academicPayload?.data?.data || [];
+
+  console.log(
+    'Academic Groups:',
+    academicData.map((g) => ({
+      id: g.id,
+      name: g.name,
+      memberId: g.memberId,
+    })),
+  );
+
+  const groupMemberIds = academicData.map((g) => g.memberId).filter(Boolean);
+
+  console.log('groupMemberIds:', groupMemberIds);
 
   if (groupMemberIds.length === 0) {
     return [];
@@ -232,23 +279,25 @@ export async function fetchAllPresenceStatus(opts = {}) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${bearer}`,
-      'accept': 'application/json, text/plain, */*',
+      Authorization: `Bearer ${bearer}`,
+      accept: 'application/json, text/plain, */*',
       'x-app-locale': 'id',
       'x-referer': 'https://edlink.id/classes',
-      'referer': 'https://edlink.id/',
+      referer: 'https://edlink.id/',
       'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
       'cache-control': 'no-cache',
-      'pragma': 'no-cache',
-      'priority': 'u=1, i',
+      pragma: 'no-cache',
+      priority: 'u=1, i',
       'sec-ch-ua': '"Google Chrome";v="147", "Not.A/Brand";v="8", "Chromium";v="147"',
       'sec-ch-ua-mobile': '?0',
       'sec-ch-ua-platform': '"Windows"',
       'sec-fetch-dest': 'empty',
       'sec-fetch-mode': 'cors',
-      'sec-fetch-site': 'same-site'
+      'sec-fetch-site': 'same-site',
     },
-    body: JSON.stringify({ groupMemberIds })
+    body: JSON.stringify({
+      groupMemberIds,
+    }),
   });
 
   if (!presenceRes.ok) {
@@ -260,14 +309,14 @@ export async function fetchAllPresenceStatus(opts = {}) {
   const presenceData = presencePayload?.data || [];
 
   // Merge with academic data to include names
-  const mergedData = presenceData.map(presenceItem => {
-    const academicItem = academicData.find(acad => acad.id === presenceItem.groupId || acad.id === presenceItem.group?.id);
+  const mergedData = presenceData.map((presenceItem) => {
+    const academicItem = academicData.find((acad) => acad.id === presenceItem.groupId || acad.id === presenceItem.group?.id);
+
     return {
       ...presenceItem,
-      name: academicItem?.name || 'Unknown'
+      name: academicItem?.name || 'Unknown',
     };
   });
 
   return mergedData;
 }
-
