@@ -1,7 +1,33 @@
-﻿from flask import Flask, render_template, request
-from scraper_logic import scrape_single_page, BASE_URL
+﻿from flask import Flask, render_template, request, Response, url_for
+from scraper_logic import scrape_single_page, BASE_URL, session
+import re
 
 app = Flask(__name__)
+
+@app.route('/download')
+def download():
+    video_url = request.args.get('url')
+    if not video_url or not re.match(r'^https?://', video_url):
+        return 'Invalid URL', 400
+
+    resp = session.get(video_url, stream=True, timeout=30)
+    if resp.status_code != 200:
+        return 'Download failed', resp.status_code
+
+    filename = video_url.rsplit('/', 1)[-1] or 'video.mp4'
+
+    def generate():
+        for chunk in resp.iter_content(1024 * 1024):
+            if chunk:
+                yield chunk
+
+    return Response(
+        generate(),
+        headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Content-Type': 'video/mp4',
+        },
+    )
 
 @app.route('/')
 def index():

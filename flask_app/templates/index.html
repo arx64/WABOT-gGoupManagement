@@ -70,6 +70,39 @@
         height: 100%;
         object-fit: cover;
         transition: 0.35s;
+        cursor: pointer;
+      }
+
+      .play-icon {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 64px;
+        height: 64px;
+        background: rgba(0, 0, 0, 0.6);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 1.5rem;
+        pointer-events: none;
+        transition: 0.25s;
+        cursor: pointer;
+      }
+
+      .thumbnail:hover .play-icon {
+        background: rgba(37, 99, 235, 0.9);
+        transform: translate(-50%, -50%) scale(1.1);
+      }
+
+      .play-icon::after {
+        content: '';
+        margin-left: 4px;
+        border-left: 16px solid white;
+        border-top: 10px solid transparent;
+        border-bottom: 10px solid transparent;
       }
 
       .video-item:hover img {
@@ -117,6 +150,54 @@
 
       .watch-button:hover {
         background: #dc2626;
+      }
+
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.85);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        padding: 20px;
+      }
+
+      .modal-overlay.active {
+        display: flex;
+      }
+
+      .modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 960px;
+        background: #000;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      }
+
+      .modal-close {
+        position: absolute;
+        top: 10px;
+        right: 14px;
+        background: rgba(0, 0, 0, 0.6);
+        color: white;
+        border: none;
+        font-size: 1.6rem;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        cursor: pointer;
+        z-index: 10;
+        line-height: 1;
+      }
+
+      .modal-content video {
+        width: 100%;
+        max-height: 80vh;
+        display: block;
+        background: #000;
       }
 
       .detail-link {
@@ -178,10 +259,11 @@
         <div class="video-item">
           <div class="thumbnail">
             {% if video.image_url %}
-            <img src="{{ video.image_url }}" alt="{{ video.title }}" />
+            <img src="{{ video.image_url }}" alt="{{ video.title }}" class="thumb-img" data-video-url="{{ video.video_url }}" data-title="{{ video.title }}" />
             {% else %}
-            <img src="https://via.placeholder.com/640x360?text=No+Image" />
+            <img src="https://via.placeholder.com/640x360?text=No+Image" class="thumb-img" data-video-url="{{ video.video_url }}" data-title="{{ video.title }}" />
             {% endif %}
+            <div class="play-icon"></div>
 
             <span class="duration">{{ video.duration }}</span>
           </div>
@@ -190,7 +272,7 @@
             <h3>{{ video.title }}</h3>
 
             {% if video.video_url %}
-            <a class="watch-button" href="{{ video.video_url }}" target="_blank"> ▶ Watch Video </a>
+            <a class="watch-button" href="{{ url_for('download', url=video.video_url) }}">⬇ Download Video {% if video.file_size_mb %}({{ video.file_size_mb }} MB){% endif %}</a>
             {% endif %}
 
             <a class="detail-link" href="{{ video.detail_link }}" target="_blank"> View Details → </a>
@@ -215,5 +297,42 @@
         {% endif %}
       </div>
     </div>
+
+    <div class="modal-overlay" id="videoModal">
+      <div class="modal-content">
+        <button class="modal-close" id="modalClose">&times;</button>
+        <video id="modalVideo" controls playsinline></video>
+      </div>
+    </div>
+
+    <script>
+      const modal = document.getElementById('videoModal');
+      const modalVideo = document.getElementById('modalVideo');
+      const modalClose = document.getElementById('modalClose');
+
+      document.querySelectorAll('.thumb-img').forEach(function (img) {
+        img.addEventListener('click', function () {
+          const url = img.getAttribute('data-video-url');
+          if (!url) return;
+          modalVideo.src = url;
+          modalVideo.play();
+          modal.classList.add('active');
+        });
+      });
+
+      modalClose.addEventListener('click', function () {
+        modal.classList.remove('active');
+        modalVideo.pause();
+        modalVideo.src = '';
+      });
+
+      modal.addEventListener('click', function (e) {
+        if (e.target === modal) {
+          modal.classList.remove('active');
+          modalVideo.pause();
+          modalVideo.src = '';
+        }
+      });
+    </script>
   </body>
 </html>

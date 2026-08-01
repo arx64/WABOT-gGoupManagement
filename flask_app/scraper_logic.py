@@ -1,5 +1,6 @@
 ﻿
 import os
+import re
 import time
 import ssl
 import requests
@@ -7,6 +8,38 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.poolmanager import PoolManager
 from lxml import html
+
+
+def _base62_char(n):
+    if n > 35:
+        return chr(n + 29)
+    if n < 10:
+        return chr(48 + n)
+    return chr(87 + n)
+
+
+def _base62(n):
+    s = ''
+    while True:
+        n, rem = divmod(n, 62)
+        s = _base62_char(rem) + s
+        if n == 0:
+            break
+    return s
+
+
+def _unpack_packed_js(body):
+    m = re.search(r"eval\(function\(p,a,c,k,e,d\).*?\}\('(.+)',(\d+),(\d+),'([^']*)'\.split\('\|'\)", body, re.S)
+    if not m:
+        return None
+    p = m.group(1)
+    a = int(m.group(2))
+    c = int(m.group(3))
+    k = m.group(4).split('|')
+    d = {}
+    for i in range(c):
+        d[_base62(i)] = k[i] if k[i] else _base62(i)
+    return re.sub(r'\b([a-zA-Z0-9_]+)\b', lambda mm: d.get(mm.group(1), mm.group(1)), p)
 
 # =========================
 # KONFIGURASI DASAR
@@ -71,6 +104,15 @@ def get_video_src(detail_url):
         if resp.status_code != 200:
             return None
 
+        if 'bebasbokep.online' in detail_url:
+            parser = html.fromstring(resp.text)
+            video_elements = parser.xpath('/html/body/div[2]/div[2]/div[3]/video')
+            if video_elements:
+                src = video_elements[0].get('src')
+                if src:
+                    return src
+            return None
+
         soup = BeautifulSoup(resp.text, 'html.parser')
 
         video = soup.find('video', src=True)
@@ -84,6 +126,44 @@ def get_video_src(detail_url):
         return None
     except Exception as e:
         print(f'[!] Error fetching video source for {detail_url}: {e}')
+        return None
+
+def resolve_final_video_url(video_url):
+    if video_url and 'bebasbokep.online' in video_url:
+        try:
+            resp = session.get(video_url, timeout=15)
+            if resp.status_code != 200:
+                return video_url
+            parser = html.fromstring(resp.text)
+            video_elements = parser.xpath('/html/body/div[2]/div[2]/div[3]/video')
+            if video_elements:
+                src = video_elements[0].get('src')
+                if src:
+                    return src
+            decoded = _unpack_packed_js(resp.text)
+            if decoded:
+                decoded = decoded.replace('\\\'', "'")
+                file_matches = re.findall(r"'file'\s*:\s*'([^']+)'", decoded)
+                for f in file_matches:
+                    if f.endswith('.mp4'):
+                        return f
+        except Exception as e:
+            print(f'[!] Error resolving video source for {video_url}: {e}')
+    return video_url
+
+def get_file_size_mb(url):
+    if not url:
+        return None
+    try:
+        resp = session.head(url, timeout=15, allow_redirects=True)
+        if resp.status_code != 200:
+            return None
+        length = resp.headers.get('Content-Length')
+        if not length:
+            return None
+        return round(int(length) / (1024 * 1024), 1)
+    except Exception as e:
+        print(f'[!] Error getting file size for {url}: {e}')
         return None
 
 def scrape_single_page(url):
@@ -127,11 +207,14 @@ duration\]'
             # print(image_url)
 
             video_src = get_video_src(detail_link)
+            video_src = resolve_final_video_url(video_src)
+            file_size_mb = get_file_size_mb(video_src)
 
             videos_data.append({
                 'title': title,
                 'detail_link': detail_link,
                 'video_url': video_src,
+                'file_size_mb': file_size_mb,
                 'image_url': image_url,
                 'duration': duration
             })
