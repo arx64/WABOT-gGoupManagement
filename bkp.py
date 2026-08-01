@@ -10,8 +10,8 @@ from urllib3.poolmanager import PoolManager
 # KONFIGURASI DASAR
 # =========================
 
-BASE_URL = 'https://bokepindoh.wtf/'
-HOSTNAME = 'bokepindoh.wtf'
+BASE_URL = 'https://bokepindoh.quest/'
+HOSTNAME = 'bokepindoh.quest'
 DEST_IP = '104.21.1.137'   # IP dari DevTools browser (Cloudflare)
 
 HEADERS = {

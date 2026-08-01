@@ -1,0 +1,48 @@
+{
+  "roles": {
+    "werewolf": {
+      "name": "Serigala",
+      "team": "werewolf",
+      "emoji": "🐺",
+      "desc": "Tidur di malam hari untuk memangsa satu pemain. Tujuan: kalahkan warga desa."
+    },
+    "seer": {
+      "name": "Dukun",
+      "team": "village",
+      "emoji": "🔮",
+      "desc": "Di malam hari dapat menyelidiki satu pemain untuk mengetahui apakah ia Serigala."
+    },
+    "bodyguard": {
+      "name": "Bodyguard",
+      "team": "village",
+      "emoji": "🛡️",
+      "desc": "Di malam hari dapat melindungi satu pemain dari serangan Serigala (tidak boleh dua malam berturut-turut melindungi orang yang sama)."
+    },
+    "villager": {
+      "name": "Warga",
+      "team": "village",
+      "emoji": "👨‍🌾",
+      "desc": "Tidak punya kemampuan khusus. Berdiskusi dan voting di siang hari untuk mengusir Serigala."
+    },
+    "hunter": {
+      "name": "Pemburu",
+      "team": "village",
+      "emoji": "🏹",
+      "desc": "Saat mati (termasuk digantung siang hari), bisa menembak satu pemain lain untuk ikut mati."
+    }
+  },
+  "distribution": {
+    "4":  ["werewolf", "seer",     "villager",      "villager"],
+    "5":  ["werewolf", "seer",     "bodyguard",     "villager",      "villager"],
+    "6":  ["werewolf", "werewolf", "seer",          "bodyguard",     "villager",      "villager"],
+    "7":  ["werewolf", "werewolf", "seer",          "bodyguard",     "villager",      "villager",      "villager"],
+    "8":  ["werewolf", "werewolf", "seer",          "bodyguard",     "hunter",        "villager",      "villager",      "villager"],
+    "9":  ["werewolf", "werewolf", "seer",          "bodyguard",     "hunter",        "villager",      "villager",      "villager",      "villager"],
+    "10": ["werewolf", "werewolf", "werewolf",      "seer",          "bodyguard",     "hunter",        "villager",      "villager",      "villager",      "villager"]
+  },
+  "minPlayers": 4,
+  "maxPlayers": 10,
+  "voteSeconds": 60,
+  "nightSeconds": 45,
+  "dayDiscussSeconds": 90
+}

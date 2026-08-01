@@ -28,6 +28,7 @@ import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from
 
 let sock;
 let qrDataURL = null;
+let BOT_PHONE = ''; // nomor bot (untuk wa.me link), terisi saat koneksi open
 const activeGuess = new Map(); // userJid → { word }
 const userScores = {}; // userJid → skor
 const gameSessions = new Map(); // userJid → { game, jawaban, soal }
@@ -357,6 +358,7 @@ const MENU_CATEGORIES = {
       { cmd: '/tebaklirik', desc: 'Tebak Lirik' },
       { cmd: '/tebaktebakan', desc: 'Tebak-Tebakan' },
       { cmd: '/tekateki', desc: 'Teka-Teki' },
+      { cmd: '/ww', desc: 'Wolvesville (Werewolf)' },
       { cmd: '/leaderboard', desc: 'Lihat leaderboard' },
       { cmd: '/skip', desc: 'Lewati soal saat ini' },
       { cmd: '/exit', desc: 'Keluar dari permainan' }
@@ -411,7 +413,9 @@ app.get('/qr', (req, res) => {
 });
 
 // port Railway: gunakan PORT dari env
-app.listen(process.env.PORT || 3000, () => console.log('🌐 QR viewer: /qr'));
+const PORT = process.env.PORT || 3000;
+const PUBLIC_HOST = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${PORT}`;
+app.listen(PORT, () => console.log(`🌐 QR viewer: http://${PUBLIC_HOST}/qr`));
 
 async function connectToWhatsApp() {
   // ===== LOG AUTO VIEW-ONCE & AUTO VIEW STORY CONFIG =====
@@ -480,6 +484,17 @@ async function connectToWhatsApp() {
     if (connection === 'open') {
       isLoggedIn = true;
       qrDataURL = null; // reset QR
+
+      // Tangkap nomor bot untuk wa.me link
+      try {
+        const uid = sock?.user?.id || sock?.user?.jid || '';
+        if (uid) {
+          BOT_PHONE = uid.split(':')[0].split('@')[0].replace(/[^0-9]/g, '');
+          console.log(`📱 Bot phone: ${BOT_PHONE}`);
+        }
+      } catch (e) {
+        console.error('Gagal tangkap nomor bot:', e);
+      }
 
       console.log('✅ Terhubung ke WhatsApp!');
       // start scheduler when connection opens
@@ -1176,6 +1191,10 @@ async function connectToWhatsApp() {
       // === HANDLE /exit ===
       if (chatMessage === '/exit') {
         if (gameSessions.has(sessionKey)) {
+          const sess = gameSessions.get(sessionKey);
+          if (sess && sess.type === 'wolvesville' && sess.timers) {
+            Object.values(sess.timers).forEach((t) => t && clearTimeout(t));
+          }
           gameSessions.delete(sessionKey);
           await sock.sendMessage(
             remoteJid,
@@ -1253,6 +1272,7 @@ async function connectToWhatsApp() {
 
       if (gameSessions.has(sessionKey) && !chatMessage.startsWith('/')) {
         const session = gameSessions.get(sessionKey);
+        if (session.type === 'wolvesville') return;
         const jawabanUser = chatMessage.toLowerCase();
 
         // FAMILY100
@@ -1887,6 +1907,765 @@ ${soal.soal}`,
           },
           { quoted: msg },
         );
+        return;
+      }
+
+      // ===== WOLVESVILLE / WW =====
+      if (chatMessage === '/ww' || chatMessage.startsWith('/ww ')) {
+        const wv = gameHandlers.wolvesville;
+        const subRaw = chatMessage === '/ww' ? '' : chatMessage.slice(4).trim();
+        const subParts = subRaw.split(/\s+/);
+        const sub = (subParts[0] || '').toLowerCase();
+        const arg1 = subParts[1];
+        const arg2 = subParts[2];
+
+        const WV_CFG = wv.getConfig();
+        const WV_NIGHT_MS = WV_CFG.nightSeconds * 1000;
+        const WV_DISCUSS_MS = WV_CFG.dayDiscussSeconds * 1000;
+        const WV_VOTE_MS = WV_CFG.voteSeconds * 1000;
+
+        const helpText =
+          `🐺 *WOLVESVILLE — Werewolf Text*\n\n` +
+          `Perintah (semua diawali /ww):\n` +
+          `  /ww help        — Bantuan ini\n` +
+          `  /ww roles       — Lihat daftar role\n` +
+          `  /ww join        — Gabung lobby\n` +
+          `  /ww leave       — Keluar lobby\n` +
+          `  /ww list        — Lihat pemain lobby\n` +
+          `  /ww start       — Mulai game (host)\n` +
+          `  /ww status      — Status game\n` +
+          `  /ww role        — Lihat role kamu (PM)\n` +
+          `  /ww vote <no>   — Vote siang hari\n` +
+          `  /ww unvote      — Batal vote\n` +
+          `  /ww kill <no>   — Serigala membunuh\n` +
+          `  /ww seer <no>   — Dukun menyelidiki\n` +
+          `  /ww protect <no>— Bodyguard melindungi\n` +
+          `  /ww shoot <no>  — Pemburu menembak\n` +
+          `  /ww day         — Paksa lanjut ke siang (host, lewati timer)\n` +
+          `  /ww night       — Paksa lanjut ke malam (host, lewati timer)\n` +
+          `  /ww end         — Akhiri paksa (host)\n` +
+          `  /exit           — Keluar & hapus sesi WW\n\n` +
+          `⏱️ Timer: malam ${WV_CFG.nightSeconds}s, diskusi ${WV_CFG.dayDiscussSeconds}s, voting ${WV_CFG.voteSeconds}s (atur di database/wolvesville.json).`;
+
+
+        function clearWvTimers(session) {
+          if (session && session.timers) {
+            Object.values(session.timers).forEach((t) => t && clearTimeout(t));
+            session.timers = {};
+          }
+        }
+
+        // Build wa.me link dengan nomor bot & url-encoded text.
+        // Contoh: https://wa.me/628xxx?text=%2Fww%20vote%203
+        function waLink(text) {
+          const phone = BOT_PHONE || '';
+          const encoded = encodeURIComponent(text);
+          return phone
+            ? `https://wa.me/${phone}?text=${encoded}`
+            : `https://wa.me/?text=${encoded}`;
+        }
+
+        // Buat baris link per pemain untuk fase tertentu
+        function playerActionLinks(session, action, excludeIdx = -1) {
+          return session.players
+            .map((p, i) => {
+              if (!p.alive || i === excludeIdx) return null;
+              const status = p.alive ? '🟢' : '💀';
+              return `${status} [#${i + 1} ${p.name}](${waLink(`/ww ${action} ${i + 1}`)})`;
+            })
+            .filter(Boolean)
+            .join('\n');
+        }
+
+        // Find the wolvesville session: prefer current chat, else search across all chats
+        // by player membership. Wolvesville PM commands (e.g. /ww kill in private chat
+        // setelah bot kirim role) harus bisa target sesi group game player tersebut.
+        function findWvSession() {
+          const cur = gameSessions.get(sessionKey);
+          if (cur && cur.type === 'wolvesville') {
+            return { session: cur, key: sessionKey };
+          }
+          for (const [key, sess] of gameSessions.entries()) {
+            if (sess && sess.type === 'wolvesville' && wv.isInSession(sess, numberUser)) {
+              return { session: sess, key };
+            }
+          }
+          return null;
+        }
+
+        // Find any active wolvesville session regardless of chat (used by timer callbacks)
+        function findWvAnySession(phase) {
+          for (const [key, sess] of gameSessions.entries()) {
+            if (sess && sess.type === 'wolvesville' && (!phase || sess.phase === phase)) {
+              return { session: sess, key };
+            }
+          }
+          return null;
+        }
+
+        async function wvSendTo(targetJid, text, mentions) {
+          const isTargetGroup = targetJid.endsWith('@g.us');
+          const payload = { text };
+          if (isTargetGroup && mentions && mentions.length) payload.mentions = mentions;
+          await sock.sendMessage(targetJid, payload);
+        }
+
+        async function wvSend(text, mentions) {
+          await wvSendTo(remoteJid, text, mentions);
+        }
+
+        async function wvRunNightEnd() {
+          const found = findWvAnySession(wv.PHASES.NIGHT);
+          if (!found) return;
+          const cur = found.session;
+          const curKey = found.key;
+          clearWvTimers(cur);
+          const r = wv.resolveNight(cur);
+          let text = `☀️ *HARI ${cur.day}*\n\n`;
+          if (r.killed) {
+            const roleName = wv.getRoleInfo(cur.players[r.killed.idx].role)?.name || '?';
+            text += `💀 Malam ini, *${r.killed.name}* (${roleName}) ditemukan mati!\n`;
+          } else if (r.saved) {
+            text += `🛡️ Seseorang diserang tapi berhasil dilindungi!\n`;
+          } else {
+            text += `🤔 Tidak ada yang mati malam ini.\n`;
+          }
+          text += `\n📜 *Pemain Hidup:*\n${wv.getPlayerListText(cur, { mention: curKey.endsWith('@g.us') })}\n\n`;
+          text += `💬 *Diskusi dibuka!* Voting akan dibuka otomatis dalam ${WV_DISCUSS_MS / 1000}s.\n`;
+          text += `Saat voting dibuka, link vote akan muncul otomatis.`;
+
+          const win = wv.checkWin(cur);
+          if (win.ended) {
+            text = `☀️ *HARI ${cur.day}*\n\n` +
+              (r.killed ? `💀 ${r.killed.name} mati.\n` : '') +
+              `\n🏆 Pemenang: *${win.winner}*\n${win.reason}\n\n${wv.getRoleRevealText(cur)}`;
+            await wvSendTo(curKey, text);
+            clearWvTimers(cur);
+            wv.endGame(cur, win.winner, win.reason);
+            gameSessions.delete(curKey);
+            return;
+          }
+
+          await wvSendTo(curKey, text, curKey.endsWith('@g.us') ? wv.getPlayerMentions(cur) : undefined);
+
+          if (cur.pendingHunter !== null && cur.pendingHunter !== undefined) {
+            const hIdx = cur.pendingHunter;
+            await wvSendTo(
+              curKey,
+              `🏹 *${cur.players[hIdx].name} (Pemburu) punya hak tembak!* Ketik /ww shoot <no> sebelum hari berakhir.`,
+              curKey.endsWith('@g.us') ? [cur.players[hIdx].jid] : undefined,
+            );
+            try {
+              await sock.sendMessage(cur.players[hIdx].jid, { text: `🏹 Kamu mati! Gunakan /ww shoot <no> sebelum hari berakhir.` });
+            } catch (e) {}
+          }
+
+          cur.timers.discussTimer = setTimeout(wvOpenVoting, WV_DISCUSS_MS);
+        }
+
+        // Kirim PM ke peran malam (werewolf, seer, bodyguard) dengan daftar pemain hidup
+        async function wvNotifyNightRoles(cur) {
+          const wolves = cur.players
+            .map((p, i) => ({ p, i }))
+            .filter(({ p }) => p.alive && p.role === 'werewolf');
+          const seers = cur.players
+            .map((p, i) => ({ p, i }))
+            .filter(({ p }) => p.alive && p.role === 'seer');
+          const bgs = cur.players
+            .map((p, i) => ({ p, i }))
+            .filter(({ p }) => p.alive && p.role === 'bodyguard');
+
+          // Werewolves
+          for (const { p: wolf } of wolves) {
+            const mates = wolves.map(({ p, i }) => `  ${i + 1}. ${p.name}`).join('\n');
+            const killLinks = wv.getAliveIdxList(cur)
+              .filter((i) => i !== cur.players.indexOf(wolf))
+              .map((i) => `  [#${i + 1} ${cur.players[i].name}](${waLink(`/ww kill ${i + 1}`)})`)
+              .join('\n');
+            try {
+              await sock.sendMessage(wolf.jid, {
+                text:
+                  `🌙 *MALAM ${cur.day} — Serigala*\n\n` +
+                  `👥 *Daftar Pemain (klik untuk kill):*\n${killLinks}\n\n` +
+                  `🐺 *Rekan Serigala:*\n${mates || '(kamu sendiri)'}\n\n` +
+                  `⏳ Aksi malam berakhir dalam ${WV_NIGHT_MS / 1000}s.`,
+              });
+            } catch (e) {
+              console.error('Gagal PM wolf:', e);
+            }
+          }
+
+          // Seers
+          for (const { p: seer } of seers) {
+            const sIdx = cur.players.indexOf(seer);
+            const seerLinks = wv.getAliveIdxList(cur)
+              .filter((i) => i !== sIdx)
+              .map((i) => `  [#${i + 1} ${cur.players[i].name}](${waLink(`/ww seer ${i + 1}`)})`)
+              .join('\n');
+            try {
+              await sock.sendMessage(seer.jid, {
+                text:
+                  `🌙 *MALAM ${cur.day} — Dukun*\n\n` +
+                  `👥 *Daftar Pemain (klik untuk investigasi):*\n${seerLinks}\n\n` +
+                  `🔮 Hasil hanya dilihat oleh kamu.\n\n` +
+                  `⏳ Aksi malam berakhir dalam ${WV_NIGHT_MS / 1000}s.`,
+              });
+            } catch (e) {
+              console.error('Gagal PM seer:', e);
+            }
+          }
+
+          // Bodyguards
+          for (const { p: bg } of bgs) {
+            const bgIdx = cur.players.indexOf(bg);
+            const bgLinks = wv.getAliveIdxList(cur)
+              .filter((i) => i !== bg.lastProtectedIdx)
+              .map((i) => `  [#${i + 1} ${cur.players[i].name}](${waLink(`/ww protect ${i + 1}`)})`)
+              .join('\n');
+            try {
+              await sock.sendMessage(bg.jid, {
+                text:
+                  `🌙 *MALAM ${cur.day} — Bodyguard*\n\n` +
+                  `👥 *Daftar Pemain (klik untuk lindungi):*\n${bgLinks}\n\n` +
+                  `🛡️ Tidak boleh melindungi orang yang sama dua malam berturut-turut.\n\n` +
+                  `⏳ Aksi malam berakhir dalam ${WV_NIGHT_MS / 1000}s.`,
+              });
+            } catch (e) {
+              console.error('Gagal PM bodyguard:', e);
+            }
+          }
+        }
+
+        async function wvOpenVoting() {
+          const found = findWvAnySession(wv.PHASES.DAY);
+          if (!found) return;
+          const cur = found.session;
+          const curKey = found.key;
+          if (cur.votingOpen) return;
+          clearWvTimers(cur);
+          wv.openVoting(cur);
+
+          let text = `🗳️ *VOTING DIBUKA!*\n\n`;
+          text += `Silakan pilih target dengan klik link berikut:\n\n`;
+          text += `${playerActionLinks(cur, 'vote')}\n\n`;
+          text += `⏳ Voting otomatis selesai dalam ${WV_VOTE_MS / 1000}s.`;
+
+          await wvSendTo(curKey, text);
+          cur.timers.voteTimer = setTimeout(wvRunDayEnd, WV_VOTE_MS);
+        }
+
+        async function wvRunDayEnd() {
+          const found = findWvAnySession(wv.PHASES.DAY);
+          if (!found) return;
+          const cur = found.session;
+          const curKey = found.key;
+          clearWvTimers(cur);
+          const r = wv.resolveVote(cur);
+          let text = `🌙 *MALAM ${cur.day + 1}*\n\n`;
+          if (r.lynched) {
+            const roleName = wv.getRoleInfo(cur.players[r.lynched.idx].role)?.name || '?';
+            text += `⚖️ Siang ini, *${r.lynched.name}* (${roleName}) digantung!\n`;
+          } else {
+            text += `${r.reason}\n`;
+          }
+          cur.phase = wv.PHASES.NIGHT;
+          cur.day += 1;
+          cur.nightActions = { kills: {}, seerChecks: {}, protects: {} };
+          cur.votingOpen = false;
+          text += `\nSilakan peran malam menjalankan aksi:\n• /ww kill <no>\n• /ww seer <no>\n• /ww protect <no>`;
+
+          if (r.hunterTrigger) {
+            text += `\n\n🏹 *${r.hunterTrigger.name} (Pemburu) punya hak tembak malam ini!*`;
+            try {
+              await sock.sendMessage(cur.players[r.hunterTrigger.idx].jid, { text: `🏹 Kamu mati digantung! Gunakan /ww shoot <no> malam ini juga.` });
+            } catch (e) {}
+            cur.pendingHunter = r.hunterTrigger.idx;
+          }
+
+          const win = wv.checkWin(cur);
+          if (win.ended) {
+            text += `\n\n🏆 Pemenang: *${win.winner}*\n${win.reason}\n\n${wv.getRoleRevealText(cur)}`;
+            await wvSendTo(curKey, text);
+            clearWvTimers(cur);
+            wv.endGame(cur, win.winner, win.reason);
+            gameSessions.delete(curKey);
+            return;
+          }
+
+          text += `\n\n⏳ Malam otomatis lanjut ke hari dalam ${WV_NIGHT_MS / 1000}s.`;
+          await wvSendTo(curKey, text);
+
+          // PM peran malam (werewolf, seer, bodyguard) dengan list pemain + link aksi
+          await wvNotifyNightRoles(cur);
+
+          cur.timers.nightTimer = setTimeout(wvRunNightEnd, WV_NIGHT_MS);
+        }
+
+        if (sub === 'help' || sub === '') {
+          await sock.sendMessage(remoteJid, { text: helpText }, { quoted: msg });
+          return;
+        }
+
+        if (sub === 'roles') {
+          await sock.sendMessage(remoteJid, { text: wv.getRoleListText() }, { quoted: msg });
+          return;
+        }
+
+        // ---- status (works in any phase) ----
+        if (sub === 'status' || sub === 'list') {
+          const found = findWvSession();
+          if (!found) {
+            await sock.sendMessage(
+              remoteJid,
+              { text: '⚠️ Belum ada sesi Wolvesville. Ketik /ww untuk mulai.' },
+              { quoted: msg },
+            );
+            return;
+          }
+          const existing = found.session;
+          if (sub === 'list') {
+            let listText = wv.getPlayerListText(existing, { mention: isGroup });
+            if (existing.phase === wv.PHASES.DAY && existing.votingOpen) {
+              const voterIdx = wv.getPlayerIdx(existing, numberUser);
+              const canVote = voterIdx !== -1 && existing.players[voterIdx].alive;
+              if (canVote) {
+                listText += `\n\n🗳️ *Vote (klik link):*\n${playerActionLinks(existing, 'vote', voterIdx)}`;
+              } else {
+                listText += `\n\n🗳️ *Vote (klik link):*\n${playerActionLinks(existing, 'vote')}`;
+              }
+            } else if (existing.phase === wv.PHASES.NIGHT) {
+              listText += `\n\n🌙 *Aksi Malam (klik link):*\n${playerActionLinks(existing, 'kill')}`;
+            } else if (existing.phase === wv.PHASES.DAY) {
+              listText += `\n\n💬 *Masa diskusi — voting belum dibuka.*`;
+            }
+            const payload = { text: listText };
+            if (isGroup) payload.mentions = wv.getPlayerMentions(existing);
+            await sock.sendMessage(remoteJid, payload, { quoted: msg });
+            return;
+          }
+          let text = wv.getStatusText(existing);
+          if (existing.phase === wv.PHASES.DAY) {
+            if (existing.votingOpen) {
+              const tally = wv.getVoteTally(existing);
+              const tallyLines = Object.entries(tally)
+                .map(([idx, c]) => `  ${Number(idx) + 1}. ${existing.players[idx].name} — ${c} suara`)
+                .sort((a, b) => Number(b.split(' — ')[1].split(' ')[0]) - Number(a.split(' — ')[1].split(' ')[0]));
+              text += `\n\n📊 *Vote Sementara:*\n${tallyLines.length ? tallyLines.join('\n') : '  (belum ada)'}`;
+              const voterIdx = wv.getPlayerIdx(existing, numberUser);
+              const canVote = voterIdx !== -1 && existing.players[voterIdx].alive;
+              if (canVote) {
+                text += `\n\n🗳️ *Klik untuk vote:*\n${playerActionLinks(existing, 'vote', voterIdx)}`;
+              } else {
+                text += `\n\n🗳️ *Klik untuk vote:*\n${playerActionLinks(existing, 'vote')}`;
+              }
+            } else {
+              text += `\n\n💬 *Masa diskusi — voting akan dibuka otomatis.*`;
+            }
+          }
+          await sock.sendMessage(remoteJid, { text }, { quoted: msg });
+          return;
+        }
+
+        // ---- join ----
+        if (sub === 'join') {
+          const found = findWvSession();
+          if (!found) {
+            const lobby = wv.createLobby(numberUser, pushName);
+            gameSessions.set(sessionKey, lobby);
+            const lobbyMentions = isGroup ? [numberUser, ...wv.getPlayerMentions(lobby)] : undefined;
+            await sock.sendMessage(
+              remoteJid,
+              {
+                text:
+                  `🐺 *WOLVESVILLE — Lobby Dibuat*\nHost: @${numberUser.split('@')[0]}\n\n` +
+                  `${wv.getPlayerListText(lobby, { mention: isGroup })}\n\n` +
+                  `Minimal ${wv.getConfig().minPlayers} pemain. Ketik /ww join untuk gabung, /ww start untuk mulai.`,
+                mentions: lobbyMentions,
+              },
+              { quoted: msg },
+            );
+            return;
+          }
+          const existing = found.session;
+          const currentKey = found.key;
+          // Kalau sesi ditemukan di chat LAIN, player sudah di game lain
+          if (currentKey !== sessionKey) {
+            await sock.sendMessage(
+              remoteJid,
+              { text: '⚠️ Kamu sudah ada di sesi Wolvesville lain. Keluar dulu dengan /ww leave (di chat game tersebut).' },
+              { quoted: msg },
+            );
+            return;
+          }
+          if (!wv.isLobby(existing)) {
+            await sock.sendMessage(remoteJid, { text: '⚠️ Game sudah berjalan, tidak bisa join.' }, { quoted: msg });
+            return;
+          }
+          const r = wv.joinLobby(existing, numberUser, pushName);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text: `✅ @${numberUser.split('@')[0]} bergabung!\n\n${wv.getPlayerListText(existing, { mention: isGroup })}`,
+              mentions: isGroup ? wv.getPlayerMentions(existing) : undefined,
+            },
+            { quoted: msg },
+          );
+          return;
+        }
+
+        // ---- leave ----
+        if (sub === 'leave') {
+          const found = findWvSession();
+          if (!found || !wv.isLobby(found.session)) {
+            await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ada lobby untuk ditinggalkan.' }, { quoted: msg });
+            return;
+          }
+          const existing = found.session;
+          const r = wv.leaveLobby(existing, numberUser);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text: `🚪 @${numberUser.split('@')[0]} keluar dari lobby.\n\n${wv.getPlayerListText(existing, { mention: isGroup })}`,
+              mentions: isGroup ? wv.getPlayerMentions(existing) : undefined,
+            },
+            { quoted: msg },
+          );
+          return;
+        }
+
+        // ---- start ----
+        if (sub === 'start') {
+          const existing = gameSessions.get(sessionKey);
+          if (!existing || existing.type !== 'wolvesville' || !wv.isLobby(existing)) {
+            await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ada lobby untuk dimulai.' }, { quoted: msg });
+            return;
+          }
+          if (existing.hostJid !== numberUser) {
+            await sock.sendMessage(remoteJid, { text: '❌ Hanya host yang bisa /ww start.' }, { quoted: msg });
+            return;
+          }
+          const r = wv.startGame(existing);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          const aliveList = wv.getPlayerListText(existing, { mention: isGroup });
+          const mentions = existing.players.map((p) => p.jid);
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text:
+                `🎬 *WOLVESVILLE DIMULAI!*\n\n${aliveList}\n\n` +
+                `🌙 *Malam 1* — Semua peran, cek PM bot untuk role kamu.\n` +
+                `• Serigala: /ww kill <no>\n` +
+                `• Dukun: /ww seer <no>\n` +
+                `• Bodyguard: /ww protect <no>`,
+              mentions: isGroup ? mentions : undefined,
+            },
+            { quoted: msg },
+          );
+          for (const p of existing.players) {
+            const info = wv.getPlayerRolePM(existing, p.jid);
+            if (!info) continue;
+            let pmText =
+              `🎭 *Role Kamu*\n\n` +
+              `${info.emoji} *${info.roleName}*\n` +
+              `${info.desc}\n\n` +
+              `Tim: ${info.team === 'werewolf' ? '🐺 Serigala' : '🏘️ Warga'}\n`;
+            if (info.role === 'werewolf') {
+              const mates = wv.getWerewolfTeamPM(existing, p.jid) || [];
+              pmText += `\n👥 *Rekan Serigala:*\n${mates.map((m) => `  ${m.idx + 1}. ${m.name} ${m.alive ? '🟢' : '💀'}`).join('\n')}\n`;
+              pmText += `\n🐺 *Klik untuk kill target:*\n${playerActionLinks(existing, 'kill', p.idx)}`;
+            } else if (info.role === 'seer') {
+              pmText += `\n🔮 *Klik untuk menyelidiki:*\n${playerActionLinks(existing, 'seer', p.idx)}`;
+            } else if (info.role === 'bodyguard') {
+              pmText += `\n🛡️ *Klik untuk lindungi:*\n${playerActionLinks(existing, 'protect', p.idx)}`;
+            } else if (info.role === 'hunter') {
+              pmText += `\n🏹 Saat kamu mati, ketik /ww shoot <no> untuk menembak satu pemain.`;
+            } else {
+              pmText += `\n[Lihat daftar pemain](${waLink('/ww list')})`;
+            }
+            try {
+              await sock.sendMessage(p.jid, { text: pmText });
+            } catch (e) {
+              console.error('Gagal kirim PM role:', e);
+            }
+          }
+          existing.timers = {};
+          existing.timers.nightTimer = setTimeout(wvRunNightEnd, WV_NIGHT_MS);
+          return;
+        }
+
+        // ---- end / cancel ----
+        if (sub === 'end' || sub === 'cancel') {
+          const found = findWvSession();
+          if (!found) {
+            await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ada sesi Wolvesville.' }, { quoted: msg });
+            return;
+          }
+          const existing = found.session;
+          const currentKey = found.key;
+          if (existing.hostJid !== numberUser) {
+            await sock.sendMessage(remoteJid, { text: '❌ Hanya host yang bisa /ww end.' }, { quoted: msg });
+            return;
+          }
+          if (existing.timers) {
+            Object.values(existing.timers).forEach((t) => t && clearTimeout(t));
+          }
+          wv.cancelLobby(existing);
+          await sock.sendMessage(
+            remoteJid,
+            { text: `🛑 Sesi Wolvesville diakhiri oleh host.` },
+            { quoted: msg },
+          );
+          gameSessions.delete(currentKey);
+          return;
+        }
+
+        // ---- role (PM info) ----
+        if (sub === 'role') {
+          const found = findWvSession();
+          if (!found) {
+            await sock.sendMessage(remoteJid, { text: '⚠️ Belum ada sesi Wolvesville.' }, { quoted: msg });
+            return;
+          }
+          const existing = found.session;
+          const info = wv.getPlayerRolePM(existing, numberUser);
+          if (!info) {
+            await sock.sendMessage(remoteJid, { text: '❌ Kamu bukan pemain di sesi ini.' }, { quoted: msg });
+            return;
+          }
+          await sock.sendMessage(remoteJid, { text: `🎭 Role kamu: ${info.emoji} *${info.roleName}*\n${info.desc}` }, { quoted: msg });
+          return;
+        }
+
+        // ---- in-game actions ----
+        const found = findWvSession();
+        if (!found) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ Belum ada sesi Wolvesville. Ketik /ww untuk mulai.' }, { quoted: msg });
+          return;
+        }
+        const existing = found.session;
+        const playerIdx = wv.getPlayerIdx(existing, numberUser);
+        if (playerIdx === -1) {
+          await sock.sendMessage(remoteJid, { text: '❌ Kamu bukan pemain di sesi ini.' }, { quoted: msg });
+          return;
+        }
+        const me = existing.players[playerIdx];
+
+        const parseTarget = (a) => {
+          if (!a) return null;
+          const n = parseInt(a, 10);
+          if (Number.isNaN(n) || n < 1 || n > existing.players.length) return null;
+          return n - 1;
+        };
+
+        // ---- werewolf kill ----
+        if (sub === 'kill') {
+          if (existing.phase !== wv.PHASES.NIGHT) {
+            await sock.sendMessage(remoteJid, { text: '❌ /ww kill hanya bisa dipakai saat malam.' }, { quoted: msg });
+            return;
+          }
+          if (me.role !== 'werewolf' || !me.alive) {
+            await sock.sendMessage(remoteJid, { text: '❌ Kamu bukan Serigala hidup.' }, { quoted: msg });
+            return;
+          }
+          const target = parseTarget(arg1);
+          if (target === null) {
+            await sock.sendMessage(remoteJid, { text: '❌ Target tidak valid. Contoh: /ww kill 2' }, { quoted: msg });
+            return;
+          }
+          const r = wv.processWerewolfKill(existing, playerIdx, target);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          const tally = existing.nightActions.kills;
+          const votes = Object.values(tally);
+          const totalWolves = existing.players.filter((p) => p.alive && p.role === 'werewolf').length;
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text:
+                `🐺 Kill dicatat: target #${target + 1} (${existing.players[target].name})\n` +
+                `Vote Serigala masuk: ${votes.length}/${totalWolves}`,
+            },
+            { quoted: msg },
+          );
+          return;
+        }
+
+        // ---- seer check ----
+        if (sub === 'seer') {
+          if (existing.phase !== wv.PHASES.NIGHT) {
+            await sock.sendMessage(remoteJid, { text: '❌ /ww seer hanya bisa dipakai saat malam.' }, { quoted: msg });
+            return;
+          }
+          if (me.role !== 'seer' || !me.alive) {
+            await sock.sendMessage(remoteJid, { text: '❌ Kamu bukan Dukun hidup.' }, { quoted: msg });
+            return;
+          }
+          const target = parseTarget(arg1);
+          if (target === null) {
+            await sock.sendMessage(remoteJid, { text: '❌ Target tidak valid. Contoh: /ww seer 3' }, { quoted: msg });
+            return;
+          }
+          const r = wv.processSeerCheck(existing, playerIdx, target);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          await sock.sendMessage(
+            remoteJid,
+            { text: `🔮 Hasil investigasi #${target + 1} (${r.targetName}): *${r.result}*` },
+            { quoted: msg },
+          );
+          return;
+        }
+
+        // ---- bodyguard protect ----
+        if (sub === 'protect') {
+          if (existing.phase !== wv.PHASES.NIGHT) {
+            await sock.sendMessage(remoteJid, { text: '❌ /ww protect hanya bisa dipakai saat malam.' }, { quoted: msg });
+            return;
+          }
+          if (me.role !== 'bodyguard' || !me.alive) {
+            await sock.sendMessage(remoteJid, { text: '❌ Kamu bukan Bodyguard hidup.' }, { quoted: msg });
+            return;
+          }
+          const target = parseTarget(arg1);
+          if (target === null) {
+            await sock.sendMessage(remoteJid, { text: '❌ Target tidak valid. Contoh: /ww protect 4' }, { quoted: msg });
+            return;
+          }
+          const r = wv.processBodyguardProtect(existing, playerIdx, target);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          await sock.sendMessage(
+            remoteJid,
+            { text: `🛡️ Kamu melindungi #${target + 1} (${existing.players[target].name}) malam ini.` },
+            { quoted: msg },
+          );
+          return;
+        }
+
+        // ---- vote / unvote ----
+        if (sub === 'vote' || sub === 'unvote') {
+          if (existing.phase !== wv.PHASES.DAY) {
+            await sock.sendMessage(remoteJid, { text: '❌ Voting hanya saat siang hari.' }, { quoted: msg });
+            return;
+          }
+          if (!me.alive) {
+            await sock.sendMessage(remoteJid, { text: '💀 Pemain mati tidak bisa vote.' }, { quoted: msg });
+            return;
+          }
+          if (sub === 'unvote') {
+            wv.processVote(existing, playerIdx, -1);
+            await sock.sendMessage(remoteJid, { text: '↩️ Vote dibatalkan.' }, { quoted: msg });
+            return;
+          }
+          const target = parseTarget(arg1);
+          if (target === null) {
+            await sock.sendMessage(remoteJid, { text: '❌ Target tidak valid. Contoh: /ww vote 2' }, { quoted: msg });
+            return;
+          }
+          const r = wv.processVote(existing, playerIdx, target);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          const tally = wv.getVoteTally(existing);
+          const aliveVoters = existing.players.filter((p) => p.alive).length;
+          const voted = Object.keys(existing.dayVotes).filter((i) => existing.players[i].alive).length;
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text:
+                `🗳️ Vote ke #${target + 1} (${existing.players[target].name}) dicatat.\n` +
+                `Progres: ${voted}/${aliveVoters} sudah vote.\n` +
+                `Tally saat ini: ${Object.entries(tally).map(([i, c]) => `#${Number(i) + 1}=${c}`).join(', ') || '-'}`,
+            },
+            { quoted: msg },
+          );
+          return;
+        }
+
+        // ---- hunter shoot ----
+        if (sub === 'shoot') {
+          if (existing.pendingHunter !== playerIdx) {
+            await sock.sendMessage(remoteJid, { text: '❌ Kamu tidak punya hak menembak saat ini.' }, { quoted: msg });
+            return;
+          }
+          const target = parseTarget(arg1);
+          if (target === null) {
+            await sock.sendMessage(remoteJid, { text: '❌ Target tidak valid. Contoh: /ww shoot 3' }, { quoted: msg });
+            return;
+          }
+          const r = wv.processHunterShoot(existing, playerIdx, target);
+          if (!r.ok) {
+            await sock.sendMessage(remoteJid, { text: `❌ ${r.reason}` }, { quoted: msg });
+            return;
+          }
+          const mentions = isGroup ? [existing.players[target.idx].jid] : undefined;
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text: `🏹 *${me.name} menembak #${target + 1} (${r.target.name})!* — ${r.target.name} mati.`,
+              mentions,
+            },
+            { quoted: msg },
+          );
+          const win = wv.checkWin(existing);
+          if (win.ended) {
+            wv.endGame(existing, win.winner, win.reason);
+            if (existing.timers) {
+              Object.values(existing.timers).forEach((t) => t && clearTimeout(t));
+              existing.timers = {};
+            }
+            // Kirim ke chat sesi (group/PM) — kalau player shoot dari PM, kirim ke chat game
+            const gameChat = found.key;
+            await sock.sendMessage(
+              gameChat,
+              {
+                text:
+                  `🏁 *GAME BERAKHIR*\n\n${wv.getRoleRevealText(existing)}\n\n` +
+                  `🏆 Pemenang: *${win.winner}*\n📝 ${win.reason}`,
+              },
+            );
+            gameSessions.delete(found.key);
+          }
+          return;
+        }
+
+        // ---- host: manual phase transition ----
+        if (sub === 'day' || sub === 'night') {
+          if (existing.hostJid !== numberUser) {
+            await sock.sendMessage(remoteJid, { text: '❌ Hanya host yang bisa pindah fase manual.' }, { quoted: msg });
+            return;
+          }
+          if (sub === 'day' && existing.phase === wv.PHASES.NIGHT) {
+            await wvRunNightEnd();
+            return;
+          }
+          if (sub === 'night' && existing.phase === wv.PHASES.DAY) {
+            await wvRunDayEnd();
+            return;
+          }
+          await sock.sendMessage(remoteJid, { text: `⚠️ Tidak bisa pindah ke fase ${sub} dari fase ${existing.phase}.` }, { quoted: msg });
+          return;
+        }
+
+        await sock.sendMessage(remoteJid, { text: `❓ Sub-perintah tidak dikenal: *${sub}*\n\n${helpText}` }, { quoted: msg });
         return;
       }
     } catch (error) {

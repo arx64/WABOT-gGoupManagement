@@ -13,6 +13,7 @@ import * as tebakkimia from './tebakkimia.js';
 import * as tebaklirik from './tebaklirik.js';
 import * as tebaktebakan from './tebaktebakan.js';
 import * as tekateki from './tekateki.js';
+import * as wolvesville from './wolvesville.js';
 // import tambahan jika ada...
 
 export default {
@@ -31,4 +32,5 @@ export default {
   tebaklirik,
   tebaktebakan,
   tekateki,
+  wolvesville,
 };
