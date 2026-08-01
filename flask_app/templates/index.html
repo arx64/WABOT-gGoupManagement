@@ -1,0 +1,219 @@
+﻿<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Video Scraper</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --primary: #2563eb;
+        --danger: #ef4444;
+        --bg: #f5f7fb;
+        --card: #ffffff;
+        --text: #1f2937;
+        --muted: #6b7280;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: 'Roboto', sans-serif;
+        background: linear-gradient(180deg, #f8fafc, #eef2f7);
+        color: var(--text);
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: auto;
+        padding: 40px 20px;
+      }
+
+      h1 {
+        text-align: center;
+        font-size: 2.3rem;
+        margin-bottom: 40px;
+        font-weight: 700;
+      }
+
+      .video-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 28px;
+      }
+
+      .video-item {
+        background: var(--card);
+        border-radius: 18px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+        transition: 0.25s;
+      }
+
+      .video-item:hover {
+        transform: translateY(-8px);
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.12);
+      }
+
+      .thumbnail {
+        position: relative;
+        aspect-ratio: 16/9;
+        overflow: hidden;
+      }
+
+      .thumbnail img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition: 0.35s;
+      }
+
+      .video-item:hover img {
+        transform: scale(1.05);
+      }
+
+      .duration {
+        position: absolute;
+        bottom: 12px;
+        right: 12px;
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 4px 8px;
+        border-radius: 6px;
+        font-size: 0.8rem;
+      }
+
+      .video-details {
+        padding: 18px;
+      }
+
+      .video-details h3 {
+        font-size: 1.05rem;
+        line-height: 1.5;
+        margin-bottom: 16px;
+
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+
+      .watch-button {
+        display: block;
+        width: 100%;
+        padding: 12px;
+        text-align: center;
+        background: var(--danger);
+        color: white;
+        border-radius: 10px;
+        text-decoration: none;
+        font-weight: 700;
+        transition: 0.2s;
+      }
+
+      .watch-button:hover {
+        background: #dc2626;
+      }
+
+      .detail-link {
+        display: block;
+        margin-top: 14px;
+        text-align: center;
+        color: var(--primary);
+        text-decoration: none;
+        font-size: 0.92rem;
+      }
+
+      .detail-link:hover {
+        text-decoration: underline;
+      }
+
+      .pagination {
+        margin: 50px auto 10px;
+        display: flex;
+        justify-content: center;
+        gap: 14px;
+        align-items: center;
+      }
+
+      .pagination a,
+      .pagination span {
+        padding: 12px 18px;
+        border-radius: 10px;
+        text-decoration: none;
+      }
+
+      .pagination a {
+        background: var(--primary);
+        color: white;
+      }
+
+      .pagination a:hover {
+        background: #1d4ed8;
+      }
+
+      .current-page {
+        background: white;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.08);
+        font-weight: bold;
+      }
+
+      .disabled {
+        background: #d1d5db;
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🎬 Video Scraper</h1>
+      <p style="text-align: center; color: #666; margin-top: -20px; margin-bottom: 35px">Browse scraped videos from the latest page.</p>
+
+      <div class="video-grid">
+        {% for video in videos %}
+        <div class="video-item">
+          <div class="thumbnail">
+            {% if video.image_url %}
+            <img src="{{ video.image_url }}" alt="{{ video.title }}" />
+            {% else %}
+            <img src="https://via.placeholder.com/640x360?text=No+Image" />
+            {% endif %}
+
+            <span class="duration">{{ video.duration }}</span>
+          </div>
+
+          <div class="video-details">
+            <h3>{{ video.title }}</h3>
+
+            {% if video.video_url %}
+            <a class="watch-button" href="{{ video.video_url }}" target="_blank"> ▶ Watch Video </a>
+            {% endif %}
+
+            <a class="detail-link" href="{{ video.detail_link }}" target="_blank"> View Details → </a>
+          </div>
+        </div>
+        {% else %}
+        <p>No videos scraped for this page.</p>
+        {% endfor %}
+      </div>
+
+      <div class="pagination">
+        {% if previous_page_url %}
+        <a href="{{ previous_page_url }}">Previous</a>
+        {% else %}
+        <span class="disabled">Previous</span>
+        {% endif %}
+        <span class="current-page">Page {{ current_page_num }}</span>
+        {% if next_page_url %}
+        <a href="{{ next_page_url }}">Next</a>
+        {% else %}
+        <span class="disabled">Next</span>
+        {% endif %}
+      </div>
+    </div>
+  </body>
+</html>
