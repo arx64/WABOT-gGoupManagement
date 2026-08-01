@@ -1,5 +1,6 @@
 import express from 'express';
 import fs from 'fs';
+import { spawn } from 'node:child_process';
 
 import 'dotenv/config';
 import dotenv from 'dotenv';
@@ -274,6 +275,218 @@ const ENV_PATH = path.join(__dirname, '.env');
 // persistent auth handled by useMultiFileAuthState; no manual pairing request
 let isLoggedIn = false;
 
+// ===== SIAKAD KHS SCRAPPING (dari "Scrapping KHS") =====
+const KHS_MAX_RUNNING = 2;
+const KHS_MAX_QUEUE = 10;
+const KHS_PYTHON_BIN = process.env.PYTHON_BIN || 'python';
+const khsRunningJobs = new Map();
+const khsQueuedJobs = [];
+let khsRunningCount = 0;
+
+function parseKhsCredentials(text) {
+  const username = text.match(/^\s*Username\s*:\s*(.+?)\s*$/im)?.[1]?.trim();
+  const password = text.match(/^\s*Password\s*:\s*(.+?)\s*$/im)?.[1]?.trim();
+
+  if (!username || !password) return null;
+  if (!/^\S+@\S+\.\S+$/.test(username)) return null;
+
+  return { username, password };
+}
+
+async function khsSafeSend(jid, content) {
+  try {
+    await sock.sendMessage(jid, content);
+  } catch (error) {
+    console.error('sendMessage failed:', error?.message || error);
+  }
+}
+
+function splitKhsMessage(text, maxLength = 3500) {
+  const chunks = [];
+  let remaining = text;
+
+  while (remaining.length > maxLength) {
+    let index = remaining.lastIndexOf('\n', maxLength);
+    if (index < 1) index = maxLength;
+    chunks.push(remaining.slice(0, index));
+    remaining = remaining.slice(index).trimStart();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
+function createKhsLogStreamer(jid) {
+  let buffer = '';
+  let timer = null;
+
+  async function flush() {
+    if (!buffer.trim()) return;
+    const text = buffer.trimEnd();
+    buffer = '';
+
+    for (const chunk of splitKhsMessage(text)) {
+      await khsSafeSend(jid, { text: '```' + chunk + '```' });
+    }
+  }
+
+  function push(data) {
+    buffer += data.toString('utf8');
+    if (buffer.length >= 3000) {
+      clearTimeout(timer);
+      timer = null;
+      void flush();
+      return;
+    }
+
+    if (!timer) {
+      timer = setTimeout(() => {
+        timer = null;
+        void flush();
+      }, 1500);
+    }
+  }
+
+  return { push, flush };
+}
+
+function enqueueKhsJob(jid, credentials) {
+  if (khsRunningJobs.has(jid) || khsQueuedJobs.some((job) => job.jid === jid)) {
+    void khsSafeSend(jid, {
+      text: 'Proses kamu masih berjalan/antre. Tunggu selesai, jangan kirim ulang.',
+    });
+    return;
+  }
+
+  if (khsRunningCount >= KHS_MAX_RUNNING && khsQueuedJobs.length >= KHS_MAX_QUEUE) {
+    void khsSafeSend(jid, { text: 'Antrean penuh. Coba lagi nanti.' });
+    return;
+  }
+
+  const job = { jid, credentials, createdAt: Date.now() };
+
+  if (khsRunningCount < KHS_MAX_RUNNING) {
+    startKhsJob(job);
+    return;
+  }
+
+  khsQueuedJobs.push(job);
+  void khsSafeSend(jid, {
+    text: `Masuk antrean. Posisi: ${khsQueuedJobs.length}. Maks proses bersamaan: ${KHS_MAX_RUNNING}.`,
+  });
+}
+
+function pumpKhsQueue() {
+  while (khsRunningCount < KHS_MAX_RUNNING && khsQueuedJobs.length > 0) {
+    startKhsJob(khsQueuedJobs.shift());
+  }
+}
+
+function startKhsJob(job) {
+  khsRunningCount += 1;
+  khsRunningJobs.set(job.jid, job);
+
+  const { username, password } = job.credentials;
+  const streamer = createKhsLogStreamer(job.jid);
+  let outputZip = '';
+
+  void khsSafeSend(job.jid, {
+    text: 'Proses dimulai. Jangan kirim ulang sampai selesai.',
+  });
+
+  const child = spawn(KHS_PYTHON_BIN, ['app.py', '--email', username, '--password', password], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      PYTHONIOENCODING: 'utf-8',
+    },
+    windowsHide: true,
+  });
+
+  child.stdout.on('data', (data) => {
+    const text = data.toString('utf8');
+    const match = text.match(/OUTPUT_ZIP:(.+)/);
+    if (match) outputZip = match[1].trim();
+    streamer.push(text);
+  });
+
+  child.stderr.on('data', (data) => streamer.push(data));
+
+  child.on('error', async (error) => {
+    await streamer.flush();
+    await khsSafeSend(job.jid, { text: `Gagal menjalankan Python: ${error.message}` });
+  });
+
+  child.on('close', async (code) => {
+    await streamer.flush();
+
+    if (code === 0) {
+      await khsSafeSend(job.jid, { text: 'Proses selesai.' });
+
+      if (outputZip && fs.existsSync(outputZip)) {
+        await khsSafeSend(job.jid, {
+          document: fs.readFileSync(outputZip),
+          mimetype: 'application/zip',
+          fileName: path.basename(outputZip),
+        });
+      } else {
+        await khsSafeSend(job.jid, { text: 'ZIP output tidak ditemukan. Cek log CMD.' });
+      }
+    } else {
+      await khsSafeSend(job.jid, { text: `Proses gagal. Exit code: ${code}` });
+    }
+
+    khsRunningJobs.delete(job.jid);
+    khsRunningCount -= 1;
+    pumpKhsQueue();
+  });
+}
+
+function handleKhsMessage(chatMessage, remoteJid) {
+  if (chatMessage.startsWith('/khs')) {
+    const args = chatMessage.slice(4).trim();
+    if (!args) {
+      void khsSafeSend(remoteJid, {
+        text: '📄 *Scrap KRS/KHS/Transkrip/KTM SIAKAD*\n\nKirim pesan berisi kredensial SIAKAD:\n\nUsername: email@domain.com\nPassword: password_siakad\n\nSetelah selesai, bot mengirim ZIP berisi PDF KRS, KHS, Transkrip & KTM.',
+      });
+      return true;
+    }
+  }
+
+  const credentials = parseKhsCredentials(chatMessage);
+  if (credentials) {
+    enqueueKhsJob(remoteJid, credentials);
+    return true;
+  }
+
+  return false;
+}
+
+// ===== CLEANUP OUTPUT KHS (hapus otomatis setelah 3 hari) =====
+const KHS_OUTPUT_TTL_MS = 3 * 24 * 60 * 60 * 1000;
+
+function cleanupKhsOutput() {
+  try {
+    const now = Date.now();
+    const entries = fs.readdirSync(__dirname, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const name = entry.name;
+      if (!name.startsWith('KRS-KHS_')) continue;
+      if (!(entry.isDirectory() || name.endsWith('.zip'))) continue;
+
+      const fullPath = path.join(__dirname, name);
+      const stat = fs.statSync(fullPath);
+      if (now - stat.mtimeMs > KHS_OUTPUT_TTL_MS) {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+        console.log(`🧹 Output KHS dihapus (umur >3 hari): ${name}`);
+      }
+    }
+  } catch (e) {
+    console.error('Gagal cleanup output KHS:', e);
+  }
+}
+
 // ===== MENU CONFIGURATION =====
 const MENU_CATEGORIES = {
   ai: {
@@ -289,7 +502,8 @@ const MENU_CATEGORIES = {
     commands: [
       { cmd: '/tugas', desc: 'Cek tugas/quiz terbuka dari EdLink' },
       { cmd: '/jadwal', desc: 'Lihat jadwal mingguan dari EdLink' },
-      { cmd: '/absen', desc: 'Cek absen dari EdLink' }
+      { cmd: '/absen', desc: 'Cek absen dari EdLink' },
+      { cmd: '/khs', desc: 'Scrap KRS/KHS/Transkrip/KTM SIAKAD (kirim Username & Password)' }
     ]
   },
   reminder: {
@@ -513,7 +727,11 @@ async function connectToWhatsApp() {
       if (reason !== DisconnectReason.loggedOut) {
         console.log('🔁 Mencoba reconnect dalam 5 detik...');
         setTimeout(() => {
-          connectToWhatsApp();
+connectToWhatsApp();
+
+// Bersihkan output KHS yang berumur >3 hari saat start, lalu tiap 6 jam
+cleanupKhsOutput();
+setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         }, 5000);
         // stop scheduler while disconnected
         try {
@@ -656,6 +874,9 @@ async function connectToWhatsApp() {
 
       // Now safe to return if no text message and not handled by uploadManager
       if (!chatMessage) return;
+
+      // === SIAKAD KHS SCRAPPING (KRS/KHS/Transkrip/KTM) ===
+      if (handleKhsMessage(chatMessage, remoteJid)) return;
 
       const sessionID = remoteJid;
 
