@@ -293,7 +293,7 @@ function parseKhsCredentials(text) {
   return { username, password };
 }
 
-async function khsSafeSend(jid, content) {
+async function khsSafeSend(sock, jid, content) {
   try {
     await sock.sendMessage(jid, content);
   } catch (error) {
@@ -316,7 +316,7 @@ function splitKhsMessage(text, maxLength = 3500) {
   return chunks;
 }
 
-function createKhsLogStreamer(jid) {
+function createKhsLogStreamer(sock, jid) {
   let buffer = '';
   let timer = null;
 
@@ -326,7 +326,7 @@ function createKhsLogStreamer(jid) {
     buffer = '';
 
     for (const chunk of splitKhsMessage(text)) {
-      await khsSafeSend(jid, { text: '```' + chunk + '```' });
+      await khsSafeSend(sock, jid, { text: '```' + chunk + '```' });
     }
   }
 
@@ -350,20 +350,20 @@ function createKhsLogStreamer(jid) {
   return { push, flush };
 }
 
-function enqueueKhsJob(jid, credentials) {
+function enqueueKhsJob(sock, jid, credentials) {
   if (khsRunningJobs.has(jid) || khsQueuedJobs.some((job) => job.jid === jid)) {
-    void khsSafeSend(jid, {
+    void khsSafeSend(sock, jid, {
       text: 'Proses kamu masih berjalan/antre. Tunggu selesai, jangan kirim ulang.',
     });
     return;
   }
 
   if (khsRunningCount >= KHS_MAX_RUNNING && khsQueuedJobs.length >= KHS_MAX_QUEUE) {
-    void khsSafeSend(jid, { text: 'Antrean penuh. Coba lagi nanti.' });
+    void khsSafeSend(sock, jid, { text: 'Antrean penuh. Coba lagi nanti.' });
     return;
   }
 
-  const job = { jid, credentials, createdAt: Date.now() };
+  const job = { sock, jid, credentials, createdAt: Date.now() };
 
   if (khsRunningCount < KHS_MAX_RUNNING) {
     startKhsJob(job);
@@ -371,7 +371,7 @@ function enqueueKhsJob(jid, credentials) {
   }
 
   khsQueuedJobs.push(job);
-  void khsSafeSend(jid, {
+  void khsSafeSend(sock, jid, {
     text: `Masuk antrean. Posisi: ${khsQueuedJobs.length}. Maks proses bersamaan: ${KHS_MAX_RUNNING}.`,
   });
 }
@@ -386,11 +386,11 @@ function startKhsJob(job) {
   khsRunningCount += 1;
   khsRunningJobs.set(job.jid, job);
 
-  const { username, password } = job.credentials;
-  const streamer = createKhsLogStreamer(job.jid);
+  const { sock, username, password } = { ...job, ...job.credentials };
+  const streamer = createKhsLogStreamer(sock, job.jid);
   let outputZip = '';
 
-  void khsSafeSend(job.jid, {
+  void khsSafeSend(sock, job.jid, {
     text: 'Proses dimulai. Jangan kirim ulang sampai selesai.',
   });
 
@@ -414,26 +414,26 @@ function startKhsJob(job) {
 
   child.on('error', async (error) => {
     await streamer.flush();
-    await khsSafeSend(job.jid, { text: `Gagal menjalankan Python: ${error.message}` });
+    await khsSafeSend(sock, job.jid, { text: `Gagal menjalankan Python: ${error.message}` });
   });
 
   child.on('close', async (code) => {
     await streamer.flush();
 
     if (code === 0) {
-      await khsSafeSend(job.jid, { text: 'Proses selesai.' });
+      await khsSafeSend(sock, job.jid, { text: 'Proses selesai.' });
 
       if (outputZip && fs.existsSync(outputZip)) {
-        await khsSafeSend(job.jid, {
+        await khsSafeSend(sock, job.jid, {
           document: fs.readFileSync(outputZip),
           mimetype: 'application/zip',
           fileName: path.basename(outputZip),
         });
       } else {
-        await khsSafeSend(job.jid, { text: 'ZIP output tidak ditemukan. Cek log CMD.' });
+        await khsSafeSend(sock, job.jid, { text: 'ZIP output tidak ditemukan. Cek log CMD.' });
       }
     } else {
-      await khsSafeSend(job.jid, { text: `Proses gagal. Exit code: ${code}` });
+      await khsSafeSend(sock, job.jid, { text: `Proses gagal. Exit code: ${code}` });
     }
 
     khsRunningJobs.delete(job.jid);
@@ -442,11 +442,11 @@ function startKhsJob(job) {
   });
 }
 
-function handleKhsMessage(chatMessage, remoteJid) {
+function handleKhsMessage(sock, chatMessage, remoteJid) {
   if (chatMessage.startsWith('/khs')) {
     const args = chatMessage.slice(4).trim();
     if (!args) {
-      void khsSafeSend(remoteJid, {
+      void khsSafeSend(sock, remoteJid, {
         text: '📄 *Scrap KRS/KHS/Transkrip/KTM SIAKAD*\n\nKirim pesan berisi kredensial SIAKAD:\n\nUsername: email@domain.com\nPassword: password_siakad\n\nSetelah selesai, bot mengirim ZIP berisi PDF KRS, KHS, Transkrip & KTM.',
       });
       return true;
@@ -455,7 +455,7 @@ function handleKhsMessage(chatMessage, remoteJid) {
 
   const credentials = parseKhsCredentials(chatMessage);
   if (credentials) {
-    enqueueKhsJob(remoteJid, credentials);
+    enqueueKhsJob(sock, remoteJid, credentials);
     return true;
   }
 
@@ -876,7 +876,7 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
       if (!chatMessage) return;
 
       // === SIAKAD KHS SCRAPPING (KRS/KHS/Transkrip/KTM) ===
-      if (handleKhsMessage(chatMessage, remoteJid)) return;
+      if (handleKhsMessage(sock, chatMessage, remoteJid)) return;
 
       const sessionID = remoteJid;
 
