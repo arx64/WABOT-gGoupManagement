@@ -627,7 +627,7 @@ app.get('/qr', (req, res) => {
 });
 
 // port: gunakan PORT dari env (Railway, Fly.io, Northflank, Render, dll semua set PORT)
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = Number(process.env.PORT) || 2004;
 // public host: cek berbagai env umum biar URL QR viewer bener di mana pun di-deploy
 const PUBLIC_HOST =
   process.env.PUBLIC_URL ||
