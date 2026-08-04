@@ -626,10 +626,20 @@ app.get('/qr', (req, res) => {
   `);
 });
 
-// port Railway: gunakan PORT dari env
-const PORT = process.env.PORT || 3000;
-const PUBLIC_HOST = process.env.RAILWAY_PUBLIC_DOMAIN || `localhost:${PORT}`;
-app.listen(PORT, () => console.log(`🌐 QR viewer: http://${PUBLIC_HOST}/qr`));
+// port: gunakan PORT dari env (Railway, Fly.io, Northflank, Render, dll semua set PORT)
+const PORT = Number(process.env.PORT) || 3000;
+// public host: cek berbagai env umum biar URL QR viewer bener di mana pun di-deploy
+const PUBLIC_HOST =
+  process.env.PUBLIC_URL ||
+  process.env.APP_URL ||
+  process.env.RAILWAY_PUBLIC_DOMAIN ||
+  process.env.NORTHFLANK_DOMAIN ||
+  process.env.RENDER_EXTERNAL_URL ||
+  process.env.FLY_APP_NAME &&
+    process.env.FLY_REGION &&
+    `https://${process.env.FLY_APP_NAME}.fly.dev` ||
+  `localhost:${PORT}`;
+app.listen(PORT, '0.0.0.0', () => console.log(`🌐 QR viewer: http://${PUBLIC_HOST}/qr`));
 
 async function connectToWhatsApp() {
   // ===== LOG AUTO VIEW-ONCE & AUTO VIEW STORY CONFIG =====
