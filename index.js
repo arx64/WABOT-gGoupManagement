@@ -2922,22 +2922,28 @@ ${soal.soal}`,
             const cachedData = getCachedMessage(remoteJid, messageId);
             
             if (cachedData) {
-              const notification = createDeletedMessageNotification(cachedData, remoteJid);
-              
-              // Siapkan mention jika grup
-              const isGroup = remoteJid.endsWith('@g.us');
-              const payload = { text: notification };
-              
-              if (isGroup) {
-                // Mention pengirim asli di group
-                const senderJid = cachedData.senderJid;
-                payload.mentions = [senderJid];
+              // Kirim notifikasi pesan dihapus ke nomor owner (OWNER_NUMBER),
+              // baik untuk grup maupun private chat
+              if (OWNER_NUMBER) {
+                const ownerJid = OWNER_NUMBER.endsWith('@s.whatsapp.net')
+                  ? OWNER_NUMBER
+                  : `${OWNER_NUMBER}@s.whatsapp.net`;
+                const notification = createDeletedMessageNotification(cachedData, remoteJid);
+                
+                const isGroup = remoteJid.endsWith('@g.us');
+                const chatSource = isGroup
+                  ? `📍 *Lokasi:* Group (${remoteJid.split('@')[0]})`
+                  : `📍 *Lokasi:* Private Chat (${remoteJid.split('@')[0]})`;
+                
+                // Kirim ke owner
+                await sock.sendMessage(ownerJid, {
+                  text: `${notification}\n\n${chatSource}`
+                });
+                
+                console.log(`✅ Pesan dihapus terdeteksi di ${remoteJid} dan dilaporkan ke owner ${OWNER_NUMBER}`);
+              } else {
+                console.log(`⚠️ OWNER_NUMBER tidak diset, pesan dihapus di ${remoteJid} tidak dilaporkan`);
               }
-              
-              // Kirim notifikasi ke chat
-              await sock.sendMessage(remoteJid, payload);
-              
-              console.log(`✅ Pesan dihapus terdeteksi dan dilaporkan di ${remoteJid}`);
             } else {
               console.log(`⚠️ Pesan dihapus terdeteksi (${messageId}) tapi data tidak ditemukan di cache`);
             }

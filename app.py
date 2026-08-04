@@ -18,6 +18,7 @@ import argparse
 import zipfile
 import fitz
 from PIL import Image
+from datetime import datetime, timedelta, timezone
 
 # ==========================================================
 # KONFIGURASI USER
@@ -93,8 +94,32 @@ tanggal_map = {
     },
 }
 
+# ==========================================================
+# TANGGAL TRANSKRIP — DUA OPSI
+# FORMAT TIDAK BOLEH DIUBAH: "Medan, 31 Juli 2026"
+#
+#   OPSI A (manual)  : isi TANGGAL_TRANSKRIP_MANUAL dengan tanggal tertentu.
+#   OPSI B (default) : pakai tanggal HARI INI (waktu cetak user, Asia/Jakarta).
+#                      Dipakai otomatis jika TANGGAL_TRANSKRIP_MANUAL kosong.
+# ==========================================================
 # Tanggal Transkrip (bisa disetting seperti KRS/KHS)
-TANGGAL_TRANSKRIP = "Medan, 31 Juli 2026"
+# TANGGAL_TRANSKRIP = "Medan, 31 Juli 2026"   # <-- kode lama (komentar, TIDAK DIHAPUS)
+
+# ----- OPSI A: TANGGAL MANUAL -----
+TANGGAL_TRANSKRIP_MANUAL = None  # None = pakai Opsi B (tanggal hari ini)
+
+# ----- OPSI B: TANGGAL HARI INI (DEFAULT) -----
+BULAN_ID = {
+    1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
+    7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember",
+}
+
+def tanggal_transkrip_hari_ini():
+    # Waktu cetak user: Asia/Jakarta (UTC+7, Indonesia tanpa DST)
+    sekarang = datetime.now(timezone.utc) + timedelta(hours=7)
+    return f"Medan, {sekarang.day} {BULAN_ID[sekarang.month]} {sekarang.year}"
+
+TANGGAL_TRANSKRIP = TANGGAL_TRANSKRIP_MANUAL or tanggal_transkrip_hari_ini()
 XPATH_TANGGAL_TRANSKRIP = "/html/body/div/div/div/table[4]/tbody/tr/td/table[2]/tbody/tr/td[2]/text()[1]"
 
 # ==========================================================
