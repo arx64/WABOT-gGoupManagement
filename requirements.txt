@@ -1,0 +1,9 @@
+beautifulsoup4==4.15.0
+fitz==0.0.1.dev2
+google_api_python_client==2.198.0
+numpy==2.5.1
+Pillow==12.3.0
+Requests==2.34.2
+selenium==4.46.0
+setuptools==80.0.0
+urllib3==2.7.0
