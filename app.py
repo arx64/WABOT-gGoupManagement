@@ -18,7 +18,6 @@ import argparse
 import zipfile
 import fitz
 from PIL import Image
-from datetime import datetime, timedelta, timezone
 
 # ==========================================================
 # KONFIGURASI USER
@@ -45,8 +44,14 @@ URL_KRS = f"{BASE_URL}/siakad/rep_krsmahasiswa"
 URL_KHS = f"{BASE_URL}/siakad/rep_khsmahasiswa"
 URL_TRANSKRIP = f"{BASE_URL}/siakad/rep_transkripsmt"
 URL_DATA_MAHASISWA = f"{BASE_URL}/siakad/data_mahasiswa"
+URL_LIST_KHS = f"{BASE_URL}/siakad/list_khs"
 XPATH_DROPDOWN_KTM = "/html/body/div[4]/div/aside/section[2]/div/div/div/div[1]/div/div/div/button"
 XPATH_CETAK_KTM = "/html/body/div[4]/div/aside/section[2]/div/div/div/div[1]/div/div/div/ul/li[2]/a"
+XPATH_CETAK_KHS_KOLEKTIF = "/html/body/div[4]/div/aside/section[2]/div/div/div/div[1]/div/div/div/ul/li[2]/a"
+
+# Footer KHS Kolektif (bagian bawah halaman report)
+XPATH_FOOTER_KHS_KOLEKTIF = "/html/body/div/div/div/div[5]"
+TAMPILKAN_FOOTER_KHS_KOLEKTIF = False
 
 # ==========================================================
 # MAPPING TANGGAL SESUAI KETENTUAN
@@ -94,32 +99,8 @@ tanggal_map = {
     },
 }
 
-# ==========================================================
-# TANGGAL TRANSKRIP — DUA OPSI
-# FORMAT TIDAK BOLEH DIUBAH: "Medan, 31 Juli 2026"
-#
-#   OPSI A (manual)  : isi TANGGAL_TRANSKRIP_MANUAL dengan tanggal tertentu.
-#   OPSI B (default) : pakai tanggal HARI INI (waktu cetak user, Asia/Jakarta).
-#                      Dipakai otomatis jika TANGGAL_TRANSKRIP_MANUAL kosong.
-# ==========================================================
 # Tanggal Transkrip (bisa disetting seperti KRS/KHS)
-# TANGGAL_TRANSKRIP = "Medan, 31 Juli 2026"   # <-- kode lama (komentar, TIDAK DIHAPUS)
-
-# ----- OPSI A: TANGGAL MANUAL -----
-TANGGAL_TRANSKRIP_MANUAL = None  # None = pakai Opsi B (tanggal hari ini)
-
-# ----- OPSI B: TANGGAL HARI INI (DEFAULT) -----
-BULAN_ID = {
-    1: "Januari", 2: "Februari", 3: "Maret", 4: "April", 5: "Mei", 6: "Juni",
-    7: "Juli", 8: "Agustus", 9: "September", 10: "Oktober", 11: "November", 12: "Desember",
-}
-
-def tanggal_transkrip_hari_ini():
-    # Waktu cetak user: Asia/Jakarta (UTC+7, Indonesia tanpa DST)
-    sekarang = datetime.now(timezone.utc) + timedelta(hours=7)
-    return f"Medan, {sekarang.day} {BULAN_ID[sekarang.month]} {sekarang.year}"
-
-TANGGAL_TRANSKRIP = TANGGAL_TRANSKRIP_MANUAL or tanggal_transkrip_hari_ini()
+TANGGAL_TRANSKRIP = "Medan, 31 Juli 2026"
 XPATH_TANGGAL_TRANSKRIP = "/html/body/div/div/div/table[4]/tbody/tr/td/table[2]/tbody/tr/td[2]/text()[1]"
 
 # ==========================================================
@@ -363,6 +344,144 @@ def download_ktm_via_ui():
     driver.switch_to.window(main_handle)
     return True
 
+def download_khs_kolektif_via_ui():
+    """
+    Flow KHS Kolektif:
+    1. Buka list_khs
+    2. Klik tombol dropdown
+    3. Klik menu cetak KHS Kolektif (xpath)
+    4. Jendela/tab baru terbuka
+    5. Simpan PDF dari jendela baru
+    """
+    main_handle = driver.current_window_handle
+    before_handles = set(driver.window_handles)
+
+    print("    • Buka list_khs")
+    driver.get(URL_LIST_KHS)
+
+    # 1) buka dropdown dulu
+    try:
+        dropdown_btn = wait.until(
+            EC.element_to_be_clickable((By.XPATH, XPATH_DROPDOWN_KTM))
+        )
+        dropdown_btn.click()
+        time.sleep(0.5)
+        print("    • Dropdown dibuka")
+    except Exception:
+        print("    ❌ Tombol dropdown KHS Kolektif tidak ditemukan")
+        return False
+
+    # 2) klik menu cetak KHS Kolektif
+    try:
+        link = wait.until(EC.element_to_be_clickable((By.XPATH, XPATH_CETAK_KHS_KOLEKTIF)))
+    except Exception:
+        print("    ❌ Link cetak KHS Kolektif tidak ditemukan")
+        return False
+
+    # pastikan link buka tab/window baru
+    try:
+        driver.execute_script("arguments[0].setAttribute('target', '_blank');", link)
+    except Exception:
+        pass
+
+    link.click()
+    print("    • Klik cetak KHS Kolektif")
+
+    # tunggu window baru muncul
+    new_handle = None
+    for _ in range(20):
+        time.sleep(0.5)
+        after_handles = set(driver.window_handles)
+        diff = after_handles - before_handles
+        if diff:
+            new_handle = diff.pop()
+            break
+
+    if not new_handle:
+        # fallback: mungkin same-tab navigation
+        print("    ⚠ Window baru tidak muncul, coba simpan di tab aktif")
+        time.sleep(2)
+        current_url = driver.current_url
+        if current_url != URL_LIST_KHS:
+            save_pdf("KHS_KOLEKTIF")
+            driver.get(URL_LIST_KHS)
+            return True
+        print("    ❌ Gagal membuka KHS Kolektif")
+        return False
+
+    driver.switch_to.window(new_handle)
+    time.sleep(2)
+
+    # tunggu load selesai
+    try:
+        WebDriverWait(driver, 15).until(
+            lambda d: d.execute_script("return document.readyState") == "complete"
+        )
+    except Exception:
+        pass
+
+    current_url = driver.current_url
+    print(f"    • Tab KHS Kolektif: {current_url}")
+
+    # sembunyikan footer jika di-nonaktifkan
+    if not TAMPILKAN_FOOTER_KHS_KOLEKTIF:
+        try:
+            hidden = driver.execute_script("""
+            const xpath = arguments[0];
+            const el = document.evaluate(xpath, document, null,
+                XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+            if (el) { el.style.display = 'none'; return true; }
+            return false;
+            """, XPATH_FOOTER_KHS_KOLEKTIF)
+            print(f"    • Footer KHS Kolektif disembunyikan: {hidden}")
+        except Exception as e:
+            print(f"    ⚠ Gagal sembunyikan footer ({e})")
+
+    # Kalau URL langsung file PDF, coba download via requests dulu (lebih murni)
+    # Skip saat footer disembunyikan: direct download ambil PDF server, footer tetap ada.
+    saved = False
+    if TAMPILKAN_FOOTER_KHS_KOLEKTIF and current_url.startswith("http") and current_url.lower().endswith(".pdf"):
+        try:
+            resp = session.get(current_url)
+            if resp.status_code == 200 and resp.content.startswith(b"%PDF"):
+                path = os.path.join(BASE_DIR, "KHS_KOLEKTIF", f"KHS_KOLEKTIF_{NAMA_MAHASISWA}.pdf")
+                with open(path, "wb") as f:
+                    f.write(resp.content)
+                print(f"    📄 PDF saved: {path}")
+                saved = True
+        except Exception as e:
+            print(f"    ⚠ Download direct gagal ({e}), fallback printToPDF")
+
+    if not saved:
+        save_pdf("KHS_KOLEKTIF")
+
+    # potong halaman terakhir (halaman kosong ekstra)
+    try:
+        path = os.path.join(BASE_DIR, "KHS_KOLEKTIF", f"KHS_KOLEKTIF_{NAMA_MAHASISWA}.pdf")
+        with open(path, "rb") as f:
+            pdf_bytes = f.read()
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        if doc.page_count > 1:
+            last_text = doc[-1].get_text().strip()
+            if not last_text:
+                doc.delete_page(-1)
+                print(f"    • Halaman kosong terakhir dihapus. Halaman: {doc.page_count}")
+            else:
+                print("    ⚠ Halaman terakhir tidak kosong, biarkan.")
+            result = doc.tobytes(garbage=3, deflate=True)
+            doc.close()
+            with open(path, "wb") as f:
+                f.write(result)
+        else:
+            doc.close()
+    except Exception as e:
+        print(f"    ⚠ Gagal potong halaman terakhir ({e})")
+
+    # tutup tab, balik ke main
+    driver.close()
+    driver.switch_to.window(main_handle)
+    return True
+
 # ==========================================================
 # BUKA HTML DI TAB BARU (tanpa edit tanggal)
 # ==========================================================
@@ -599,6 +718,7 @@ os.makedirs(os.path.join(BASE_DIR, "KRS"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "KHS"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "TRANSKRIP"), exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "KTM"), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, "KHS_KOLEKTIF"), exist_ok=True)
 
 def save_pdf(jenis, periode=None):
     if periode:
@@ -664,6 +784,11 @@ if render_edit_transkrip(html_transkrip, TANGGAL_TRANSKRIP):
     save_pdf("TRANSKRIP")
 driver.close()
 driver.switch_to.window(driver.window_handles[0])
+
+# ---------- KHS KOLEKTIF ----------
+print("\n[*] Proses KHS Kolektif")
+if not download_khs_kolektif_via_ui():
+    print("    ❌ KHS Kolektif gagal diproses.")
 
 # ---------- KTM ----------
 print("\n[*] Proses KTM")
