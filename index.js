@@ -25,6 +25,15 @@ import { createNote, getNoteById, listNotes, deleteNote } from './notes.js';
 import { startScheduler, stopScheduler } from './scheduler.js';
 import { startEdlinkScheduler, stopEdlinkScheduler, fetchOpenAssignments, fetchPresenceStatus, fetchAllPresenceStatus } from './edlinkScheduler.js';
 import uploadManager from './uploadManager.js';
+import {
+  startSendSession,
+  handleSendInput,
+  cancelSendSession,
+  listSends,
+  cancelSend,
+  startSendScheduler,
+  stopSendScheduler,
+} from './sendScheduler.js';
 import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
 
 let sock;
@@ -536,6 +545,15 @@ const MENU_CATEGORIES = {
       { cmd: '/notes delete <ID>', desc: 'Hapus note' }
     ]
   },
+  scheduler: {
+    emoji: '📨',
+    title: 'PESAN TERJADWAL',
+    commands: [
+      { cmd: '/send <nomor>', desc: 'Jadwalkan kirim pesan ke nomor WA' },
+      { cmd: '/sendlist', desc: 'Lihat daftar pesan terjadwal' },
+      { cmd: '/sendcancel <id>', desc: 'Batalkan pesan terjadwal' }
+    ]
+  },
   media: {
     emoji: '📎',
     title: 'MEDIA & FILE',
@@ -726,6 +744,7 @@ async function connectToWhatsApp() {
         startScheduler(sock).catch((err) => console.error('startScheduler failed:', err));
         // start edlink scheduler if configured (EDLINK_BEARER and EDLINK_NOTIFY_JID)
         startEdlinkScheduler(sock).catch((err) => console.error('startEdlinkScheduler failed:', err));
+        startSendScheduler(sock).catch((err) => console.error('startSendScheduler failed:', err));
       } catch (e) {
         console.error('Failed to start scheduler:', e);
       }
@@ -751,6 +770,11 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         }
         try {
           stopEdlinkScheduler();
+        } catch (e) {
+          /* ignore */
+        }
+        try {
+          stopSendScheduler();
         } catch (e) {
           /* ignore */
         }
@@ -887,6 +911,53 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
 
       // === SIAKAD KHS SCRAPPING (KRS/KHS/Transkrip/KTM) ===
       if (handleKhsMessage(sock, chatMessage, remoteJid)) return;
+
+      // === PESAN TERJADWAL (SCHEDULED SEND) ===
+      // /batal — batalkan sesi aktif
+      if ((chatMessage === '/batal' || chatMessage === '/cancelsend') && await cancelSendSession(sock, remoteJid, numberUser)) {
+        return;
+      }
+
+      // /sendlist
+      if (chatMessage.startsWith('/sendlist')) {
+        const text = await listSends(numberUser);
+        await sock.sendMessage(remoteJid, { text }, { quoted: m.messages[0] });
+        return;
+      }
+
+      // /sendcancel <id>
+      if (chatMessage.startsWith('/sendcancel')) {
+        const id = parseInt(chatMessage.split(' ')[1], 10);
+        const result = Number.isNaN(id) ? '❌ Format: /sendcancel <id>' : await cancelSend(id, numberUser);
+        await sock.sendMessage(remoteJid, { text: result }, { quoted: m.messages[0] });
+        return;
+      }
+
+      // /send <nomor>
+      if (chatMessage.startsWith('/send')) {
+        const target = chatMessage.slice(5).trim();
+        if (!target) {
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text:
+                '📨 *Kirim Pesan Terjadwal*\n\n' +
+                'Format: /send <nomor>\nContoh: /send 6281234567890\n\n' +
+                'Bot akan minta teks pesan & waktu pengiriman.\n\n' +
+                '• /sendlist — lihat daftar\n• /sendcancel <id> — batalkan',
+            },
+            { quoted: m.messages[0] },
+          );
+          return;
+        }
+        await startSendSession(sock, remoteJid, numberUser, target);
+        return;
+      }
+
+      // Proses jawaban sesi send (teks non-command)
+      if (!chatMessage.startsWith('/')) {
+        if (await handleSendInput(sock, remoteJid, numberUser, chatMessage)) return;
+      }
 
       const sessionID = remoteJid;
 
