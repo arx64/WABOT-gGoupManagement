@@ -18,6 +18,7 @@ import argparse
 import zipfile
 import fitz
 from PIL import Image
+from datetime import datetime
 
 # ==========================================================
 # KONFIGURASI USER
@@ -95,12 +96,29 @@ tanggal_map = {
     # Genap 2025/2026
     "20252": {
         "krs": "Medan, 05 Maret 2026",
-        "khs": "Medan, 31 Juli 2026",
+        "khs": "Medan, 07 September 2026",
     },
 }
 
-# Tanggal Transkrip (bisa disetting seperti KRS/KHS)
-TANGGAL_TRANSKRIP = "Medan, 31 Juli 2026"
+# Pilihan tanggal Transkrip:
+# 1 = tanggal manual
+# 2 = tanggal otomatis berdasarkan waktu saat program dijalankan
+PILIHAN_TANGGAL_TRANSKRIP = 2
+TANGGAL_TRANSKRIP_MANUAL = "Medan, 07 September 2026"
+
+def tanggal_transkrip():
+    if PILIHAN_TANGGAL_TRANSKRIP == 1:
+        return TANGGAL_TRANSKRIP_MANUAL
+    if PILIHAN_TANGGAL_TRANSKRIP == 2:
+        nama_bulan = (
+            "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+            "Juli", "Agustus", "September", "Oktober", "November", "Desember"
+        )
+        waktu_sekarang = datetime.now()
+        return f"Medan, {waktu_sekarang.day:02d} {nama_bulan[waktu_sekarang.month - 1]} {waktu_sekarang.year}"
+    raise ValueError("PILIHAN_TANGGAL_TRANSKRIP harus bernilai 1 atau 2")
+
+TANGGAL_TRANSKRIP = tanggal_transkrip()
 XPATH_TANGGAL_TRANSKRIP = "/html/body/div/div/div/table[4]/tbody/tr/td/table[2]/tbody/tr/td[2]/text()[1]"
 
 # ==========================================================

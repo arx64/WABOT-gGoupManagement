@@ -6,7 +6,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "tray": "electron tray.cjs",
+    "test": "node --test utils/viewOnce.test.js"
   },
   "keywords": [],
   "author": "",
@@ -27,5 +28,8 @@
     "qrcode-terminal": "^0.12.0",
     "request": "^2.88.2",
     "sqlite3": "^5.1.7"
+  },
+  "devDependencies": {
+    "electron": "^41.7.1"
   }
 }

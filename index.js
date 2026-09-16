@@ -35,6 +35,7 @@ import {
   stopSendScheduler,
 } from './sendScheduler.js';
 import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
+import { extractViewOnceContent } from './utils/viewOnce.js';
 
 let sock;
 let qrDataURL = null;
@@ -63,14 +64,20 @@ let VIEW_ONCE_AUTO_SENDERS = (process.env.AUTO_VIEW_ONCE_JIDS || '')
   .map((jid) => jid.trim())
   .filter(Boolean);
 
+function normalizeJidNumber(jid) {
+  return String(jid || '')
+    .split('@')[0]
+    .split(':')[0]
+    .replace(/[^0-9]/g, '');
+}
+
 function isAutoViewOnceSender(jid) {
   if (!jid || VIEW_ONCE_AUTO_SENDERS.length === 0) return false;
-  
-  const normalized = jid.split('@')[0]; // remove domain
-  return VIEW_ONCE_AUTO_SENDERS.some((target) => {
-    const normTarget = target.split('@')[0];
-    return normalized === normTarget;
-  });
+
+  const normalized = normalizeJidNumber(jid);
+  if (!normalized) return false;
+
+  return VIEW_ONCE_AUTO_SENDERS.some((target) => normalized === normalizeJidNumber(target));
 }
 
 // ===== AUTO VIEW STORY CONFIG =====
@@ -172,106 +179,113 @@ function findRecentViewOnce(chatJid) {
   return cache[cache.length - 1].message;
 }
 
+function getRegularMediaPayload(viewOnce) {
+  const { mediaType, mediaMessage } = viewOnce;
+  if (!mediaType || !mediaMessage) {
+    throw new Error('Payload view-once terdeteksi, tetapi medianya tidak tersedia. Pesan mungkin sudah dibuka atau diterima dari history sync.');
+  }
+
+  const caption = mediaMessage.caption;
+
+  switch (mediaType) {
+    case 'imageMessage':
+      return {
+        outputType: 'image',
+        payload: { image: null, ...(caption ? { caption } : {}) },
+      };
+    case 'videoMessage':
+    case 'ptvMessage':
+      return {
+        outputType: 'video',
+        payload: { video: null, ...(caption ? { caption } : {}) },
+      };
+    case 'audioMessage':
+      return {
+        outputType: 'audio',
+        payload: {
+          audio: null,
+          mimetype: mediaMessage.mimetype || 'audio/mpeg',
+          ptt: mediaMessage.ptt || false,
+        },
+      };
+    case 'documentMessage':
+      return {
+        outputType: 'document',
+        payload: {
+          document: null,
+          fileName: mediaMessage.fileName || mediaMessage.filename || 'file',
+          mimetype: mediaMessage.mimetype || 'application/octet-stream',
+          ...(caption ? { caption } : {}),
+        },
+      };
+    case 'stickerMessage':
+      return { outputType: 'sticker', payload: { sticker: null } };
+    default:
+      throw new Error(`Tipe media view-once belum didukung: ${mediaType}`);
+  }
+}
+
+async function downloadViewOnceMedia(sock, sourceMessage, viewOnce) {
+  // Preserve the complete WAMessage when available. It contains the key needed
+  // by Baileys if WhatsApp asks the client to re-upload an expired media URL.
+  const envelope = sourceMessage?.message
+    ? sourceMessage
+    : { message: sourceMessage };
+
+  try {
+    return await downloadMediaMessage(
+      envelope,
+      'buffer',
+      {},
+      { reuploadRequest: sock.updateMediaMessage },
+    );
+  } catch (firstError) {
+    console.warn('Download view-once dari envelope gagal, mencoba inner media:', firstError.message);
+    return downloadMediaMessage({ message: viewOnce.content }, 'buffer');
+  }
+}
+
+async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage) {
+  const viewOnce = extractViewOnceContent(sourceMessage);
+  if (!viewOnce) {
+    throw new Error('Pesan bukan media view-once.');
+  }
+
+  const { outputType, payload } = getRegularMediaPayload(viewOnce);
+  const buffer = await downloadViewOnceMedia(sock, sourceMessage, viewOnce);
+  payload[outputType] = buffer;
+
+  await sock.sendMessage(remoteJid, payload, quotedMessage ? { quoted: quotedMessage } : undefined);
+  return true;
+}
+
 async function autoSendViewOnceAsFile(sock, remoteJid, msg) {
   try {
-    console.log('🔄 Auto-send view-once triggered for', remoteJid);
-    const msgContent = msg.message;
-    if (!msgContent || !(msgContent.viewOnceMessage || msgContent.viewOnceMessageV2)) {
-      console.log('❌ No view-once message found');
+    const viewOnce = extractViewOnceContent(msg);
+    if (!viewOnce?.mediaMessage) {
+      console.warn('[view-once] Marker received without media; skipping auto-send', {
+        remoteJid,
+        messageId: msg?.key?.id,
+      });
       return false;
     }
 
-    let unwrapped = null;
-    if (msgContent.viewOnceMessage) unwrapped = msgContent.viewOnceMessage.message;
-    else if (msgContent.viewOnceMessageV2) unwrapped = msgContent.viewOnceMessageV2.message;
-
-    if (!unwrapped) {
-      console.log('❌ Failed to unwrap view-once message');
-      return false;
-    }
-
-    let mediaMessage = null;
-    let mediaType = null;
-    let fileName = null;
-    let mimeType = null;
-    let caption = null;
-
-    if (unwrapped.imageMessage) {
-      mediaMessage = unwrapped.imageMessage;
-      mediaType = 'image';
-      mimeType = mediaMessage.mimetype || 'image/jpeg';
-      caption = mediaMessage.caption;
-    } else if (unwrapped.videoMessage) {
-      mediaMessage = unwrapped.videoMessage;
-      mediaType = 'video';
-      mimeType = mediaMessage.mimetype || 'video/mp4';
-      caption = mediaMessage.caption;
-    } else if (unwrapped.documentMessage) {
-      mediaMessage = unwrapped.documentMessage;
-      mediaType = 'document';
-      fileName = mediaMessage.filename || 'file';
-      mimeType = mediaMessage.mimetype || 'application/octet-stream';
-    } else if (unwrapped.audioMessage) {
-      mediaMessage = unwrapped.audioMessage;
-      mediaType = 'audio';
-      mimeType = mediaMessage.mimetype || 'audio/mpeg';
-      fileName = 'audio.mp3';
-    } else if (unwrapped.stickerMessage) {
-      mediaMessage = unwrapped.stickerMessage;
-      mediaType = 'sticker';
-      mimeType = 'image/webp';
-    } else {
-      console.log('❌ Unsupported media type in view-once');
-      return false;
-    }
-
-    const messageForDownload = { message: {} };
-    messageForDownload.message[`${mediaType}Message`] = mediaMessage;
-
-    let buffer;
-    try {
-      buffer = await downloadMediaMessage(messageForDownload, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
-    } catch (e) {
-      console.log('Download attempt 1 failed:', e.message);
-      try {
-        buffer = await downloadMediaMessage(messageForDownload, 'buffer');
-      } catch (e2) {
-        console.log('Download attempt 2 failed:', e2.message);
-        try {
-          buffer = await downloadMediaMessage(unwrapped, 'buffer');
-        } catch (e3) {
-          console.log('Download attempt 3 failed:', e3.message);
-          throw new Error('Tidak dapat mengunduh media: ' + e3.message);
-        }
-      }
-    }
-
-    const payload = {};
-    if (mediaType === 'image') {
-      payload.image = buffer;
-      if (caption) payload.caption = caption;
-    } else if (mediaType === 'video') {
-      payload.video = buffer;
-      if (caption) payload.caption = caption;
-    } else if (mediaType === 'document') {
-      payload.document = buffer;
-      payload.filename = fileName;
-      payload.mimetype = mimeType;
-    } else if (mediaType === 'audio') {
-      payload.audio = buffer;
-      payload.mimetype = mimeType;
-      payload.ptt = mediaMessage.ptt || false;
-    } else if (mediaType === 'sticker') {
-      payload.sticker = buffer;
-    }
-
-    await sock.sendMessage(remoteJid, payload, { quoted: msg });
-    await sock.sendMessage(remoteJid, { text: '✅ Auto-convert: view-once dikirim sebagai file biasa.' }, { quoted: msg });
-    console.log('✅ Auto-send view-once completed');
+    console.log('[view-once] Auto-send triggered for', remoteJid);
+    await sendViewOnceAsFile(sock, remoteJid, msg, msg);
+    await sock.sendMessage(
+      remoteJid,
+      { text: 'Auto-convert berhasil: view-once dikirim sebagai file biasa.' },
+      { quoted: msg },
+    );
+    console.log('[view-once] Auto-send completed');
     return true;
-  } catch (e) {
-    console.error('autoSendViewOnceAsFile error:', e);
-    await sock.sendMessage(remoteJid, { text: `❌ Gagal auto-convert view-once: ${e.message}` }, { quoted: msg });
+  } catch (error) {
+    console.error('autoSendViewOnceAsFile error:', error);
+    await sock.sendMessage(
+      remoteJid,
+      { text: `Gagal auto-convert view-once: ${error.message}` },
+      msg?.message ? { quoted: msg } : undefined,
+    );
     return false;
   }
 }
@@ -812,41 +826,53 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
       }
     }
 
-    // Cache view-once messages for /see command (outside try block to avoid hoisting issues)
+    // Detect all Baileys view-once variants before text extraction. View-once
+    // messages usually have no conversation/caption at the outer level.
     const msgContent = msg.message;
-    if (msgContent && Object.keys(msgContent).length > 0 && !isFromMe) {
-      console.log('📨 msg.message keys:', Object.keys(msgContent));
-    }
     const remoteJidCache = msg.key.remoteJid;
-    if (msgContent && (msgContent.viewOnceMessage || msgContent.viewOnceMessageV2)) {
-      console.log('🔍 View-once detected:', JSON.stringify({
-        msgContentKeys: Object.keys(msgContent),
+    const viewOnce = extractViewOnceContent(msg);
+
+    if (viewOnce) {
+      const contentKeys = msgContent ? Object.keys(msgContent) : [];
+      console.log('[view-once] Detected:', JSON.stringify({
+        msgContentKeys: contentKeys,
+        wrapperType: viewOnce.wrapperType,
+        detectedBy: viewOnce.detectedBy,
+        mediaType: viewOnce.mediaType,
+        hasMedia: Boolean(viewOnce.mediaMessage),
         remoteJid: remoteJidCache,
         remoteJidAlt: msg.key.remoteJidAlt,
         participant: msg.key.participant,
         participantAlt: msg.key.participantAlt,
         isFromMe,
-        configuredSenders: AUTO_VIEW_ONCE_SENDERS
+        configuredSenders: VIEW_ONCE_AUTO_SENDERS,
       }));
-      addToViewOnceCache(remoteJidCache, msgContent);
 
-      const senderJid = msg.key.participant || remoteJidCache;
-      const senderJidAlt = msg.key.participantAlt || (remoteJidCache.endsWith('@g.us') ? undefined : msg.key.remoteJidAlt);
-      console.log('🔍 Auto-send check:', JSON.stringify({
-        senderJid: senderJid?.split('@')[0],
-        senderJidAlt: senderJidAlt?.split('@')[0],
-        isAutoViewOnceSender_primary: senderJid ? isAutoViewOnceSender(senderJid) : false,
-        isAutoViewOnceSender_alt: senderJidAlt ? isAutoViewOnceSender(senderJidAlt) : false,
-        remoteJidCache
-      }));
-      if (!isFromMe && (isAutoViewOnceSender(senderJid) || (senderJidAlt && isAutoViewOnceSender(senderJidAlt)))) {
-        try {
-          console.log('🔄 Auto-send view-once triggered for', senderJid, 'in', remoteJidCache);
+      // `key.isViewOnce` can arrive as an unavailable marker after WhatsApp
+      // removes media content. It cannot be downloaded and must not enter cache.
+      if (!viewOnce.mediaMessage) {
+        console.warn('[view-once] No media content in event; auto-see skipped', {
+          messageId: msg.key.id,
+          remoteJid: remoteJidCache,
+        });
+      } else {
+        // Cache the complete WAMessage so /see without reply preserves its key.
+        if (!isFromMe) addToViewOnceCache(remoteJidCache, msg);
+
+        const senderCandidates = remoteJidCache?.endsWith('@g.us')
+          ? [msg.key.participantAlt, msg.key.participant]
+          : [msg.key.remoteJidAlt, remoteJidCache, msg.key.participantAlt, msg.key.participant];
+        const senderJid = senderCandidates.find((jid) => isAutoViewOnceSender(jid));
+
+        console.log('[view-once] Auto-send check:', JSON.stringify({
+          senderCandidates: senderCandidates.filter(Boolean),
+          matchedSender: senderJid || null,
+          remoteJid: remoteJidCache,
+        }));
+
+        if (!isFromMe && senderJid) {
           await autoSendViewOnceAsFile(sock, remoteJidCache, msg);
-        } catch (e) {
-          console.error('Error auto-sending view-once:', e);
         }
-        // continue processing if desired; we can still handle commands if message also has text
       }
     }
 
@@ -1109,155 +1135,44 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
       }
 
       // === Handle /see command for view-once files ===
-      if (chatMessage === '/see') {
-        let unwrappedMessage = null;
-        let originalQuotedMessage = null;
-        let targetMessage = null;
+      if (chatMessage.trim().toLowerCase() === '/see') {
+        const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
+        const quotedMessage = quotedContext?.quotedMessage;
+        const targetMessage = quotedMessage
+          ? {
+              key: {
+                remoteJid,
+                id: quotedContext.stanzaId,
+                participant: quotedContext.participant,
+                fromMe: false,
+              },
+              message: quotedMessage,
+            }
+          : findRecentViewOnce(remoteJid);
 
-        // Check if the message is a reply
-        const isReply = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-
-        if (isReply) {
-          // Mode 1: Using reply
-          originalQuotedMessage = msg.message.extendedTextMessage.contextInfo.quotedMessage;
-          targetMessage = originalQuotedMessage;
-
-          // Unwrap view-once messages to detect type
-          if (originalQuotedMessage.viewOnceMessage) {
-            unwrappedMessage = originalQuotedMessage.viewOnceMessage.message;
-          } else if (originalQuotedMessage.viewOnceMessageV2) {
-            unwrappedMessage = originalQuotedMessage.viewOnceMessageV2.message;
-          } else {
-            unwrappedMessage = originalQuotedMessage;
-          }
-        } else {
-          // Mode 2: Auto-search recent view-once messages from cache
-          targetMessage = findRecentViewOnce(remoteJid);
-
-          if (!targetMessage) {
-            await sock.sendMessage(remoteJid, { text: '⚠️ Tidak ditemukan media view-once di cache.\n\n💡 Tips: Reply langsung ke pesan view-once lalu ketik /see' }, { quoted: msg });
-            return;
-          }
-
-          // Unwrap view-once message
-          if (targetMessage.viewOnceMessage) {
-            unwrappedMessage = targetMessage.viewOnceMessage.message;
-          } else if (targetMessage.viewOnceMessageV2) {
-            unwrappedMessage = targetMessage.viewOnceMessageV2.message;
-          } else {
-            unwrappedMessage = targetMessage;
-          }
-        }
-
-        if (!unwrappedMessage) {
-          await sock.sendMessage(remoteJid, { text: '❌ Gagal membaca pesan. Silakan coba lagi.' }, { quoted: msg });
-          return;
-        }
-
-        // Check if quoted message has media (image, video, document, audio, etc.)
-        let mediaMessage = null;
-        let mediaType = null;
-        let fileName = null;
-        let mimeType = null;
-        let caption = null;
-
-        if (unwrappedMessage.imageMessage) {
-          mediaMessage = unwrappedMessage.imageMessage;
-          mediaType = 'image';
-          mimeType = mediaMessage.mimetype || 'image/jpeg';
-          caption = mediaMessage.caption;
-        } else if (unwrappedMessage.videoMessage) {
-          mediaMessage = unwrappedMessage.videoMessage;
-          mediaType = 'video';
-          mimeType = mediaMessage.mimetype || 'video/mp4';
-          caption = mediaMessage.caption;
-        } else if (unwrappedMessage.audioMessage) {
-          mediaMessage = unwrappedMessage.audioMessage;
-          mediaType = 'audio';
-          mimeType = mediaMessage.mimetype || 'audio/mpeg';
-          fileName = 'audio.mp3';
-        } else if (unwrappedMessage.documentMessage) {
-          mediaMessage = unwrappedMessage.documentMessage;
-          mediaType = 'document';
-          fileName = mediaMessage.filename || 'file';
-          mimeType = mediaMessage.mimetype || 'application/octet-stream';
-        } else if (unwrappedMessage.stickerMessage) {
-          mediaMessage = unwrappedMessage.stickerMessage;
-          mediaType = 'sticker';
-          mimeType = 'image/webp';
-        } else {
-          await sock.sendMessage(remoteJid, { text: '❌ Pesan yang di-reply bukan file media. Silakan reply file yang ingin dilihat.' }, { quoted: msg });
+        if (!targetMessage) {
+          await sock.sendMessage(
+            remoteJid,
+            { text: 'Tidak ditemukan media view-once di cache.\n\nReply langsung ke pesan view-once lalu ketik /see.' },
+            { quoted: msg },
+          );
           return;
         }
 
         try {
-          // Build proper message structure for downloadMediaMessage
-          const messageForDownload = {
-            message: {
-              [mediaType === 'image'
-                ? 'imageMessage'
-                : mediaType === 'video'
-                  ? 'videoMessage'
-                  : mediaType === 'audio'
-                    ? 'audioMessage'
-                    : mediaType === 'document'
-                      ? 'documentMessage'
-                      : mediaType === 'sticker'
-                        ? 'stickerMessage'
-                        : 'imageMessage']: mediaMessage,
-            },
-          };
-
-          let buffer;
-          try {
-            buffer = await downloadMediaMessage(messageForDownload, 'buffer', {}, { reuploadRequest: sock.updateMediaMessage });
-          } catch (e) {
-            console.log('Download attempt 1 failed:', e.message);
-            // Fallback: try dengan message structure berbeda
-            try {
-              buffer = await downloadMediaMessage(messageForDownload, 'buffer');
-            } catch (e2) {
-              console.log('Download attempt 2 failed:', e2.message);
-              // Last resort: coba download dari unwrappedMessage langsung
-              try {
-                buffer = await downloadMediaMessage(unwrappedMessage, 'buffer');
-              } catch (e3) {
-                console.log('Download attempt 3 failed:', e3.message);
-                throw new Error('Tidak dapat mengunduh media: ' + e3.message);
-              }
-            }
-          }
-
-          // Send back as regular file (non-view-once)
-          const messagePayload = {};
-
-          if (mediaType === 'image') {
-            messagePayload.image = buffer;
-            if (caption) {
-              messagePayload.caption = caption;
-            }
-          } else if (mediaType === 'video') {
-            messagePayload.video = buffer;
-            if (caption) {
-              messagePayload.caption = caption;
-            }
-          } else if (mediaType === 'audio') {
-            messagePayload.audio = buffer;
-            messagePayload.mimetype = mimeType;
-            messagePayload.ptt = mediaMessage.ptt || false;
-          } else if (mediaType === 'document') {
-            messagePayload.document = buffer;
-            messagePayload.filename = fileName;
-            messagePayload.mimetype = mimeType;
-          } else if (mediaType === 'sticker') {
-            messagePayload.sticker = buffer;
-          }
-
-          await sock.sendMessage(remoteJid, messagePayload, { quoted: msg });
-          await sock.sendMessage(remoteJid, { text: '✅ File telah dikirim sebagai file biasa (tidak sekali dilihat lagi).' }, { quoted: msg });
+          await sendViewOnceAsFile(sock, remoteJid, targetMessage, msg);
+          await sock.sendMessage(
+            remoteJid,
+            { text: 'File telah dikirim sebagai file biasa (tidak sekali dilihat lagi).' },
+            { quoted: msg },
+          );
         } catch (error) {
           console.error('Error downloading/sending view-once media:', error);
-          await sock.sendMessage(remoteJid, { text: `❌ Gagal mengunduh media: ${error.message}` }, { quoted: msg });
+          await sock.sendMessage(
+            remoteJid,
+            { text: `Gagal membaca media view-once: ${error.message}` },
+            { quoted: msg },
+          );
         }
         return;
       }
@@ -1288,14 +1203,14 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
             return new Date(p);
           };
 
-          const lines = items.map((it) => {
+          const lines = items.map((it, index) => {
             const due = parseMaybeDate(it.dueAt || it.publishedAtTimestamp || it.section?.endedAtTimestamp);
             const dueStr = due ? due.toLocaleString('id-ID') : '—';
             // console.log(it.group);
             const className = it.group?.className || '';
             const kelas = it.group?.name || it.group?.className || '';
             const link = (it.group?.description && (it.group.description.match(/https?:\/\/(\S+)/) || [])[0]) || '';
-            return `• ${it.title || 'Tugas/Quiz'}\nKelas: ${kelas} (${className})\nWaktu: ${dueStr}\n${link}`;
+            return `${index + 1}. ${it.title || 'Tugas/Quiz'}\nKelas: ${kelas} (${className})\nWaktu: ${dueStr}\n${link}`;
           });
 
           const out = `📚 *Daftar Tugas / Quiz Terbuka:*
