@@ -36,6 +36,7 @@ import {
 } from './sendScheduler.js';
 import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
 import { extractViewOnceContent } from './utils/viewOnce.js';
+import { handleUktCommand } from './uktManager.js';
 
 let sock;
 let qrDataURL = null;
@@ -55,6 +56,10 @@ let DELETED_MESSAGE_DETECTION = process.env.DELETED_MESSAGE_DETECTION !== 'false
 
 // ===== OWNER CONFIG =====
 let OWNER_NUMBER = process.env.OWNER_NUMBER || '';
+
+// ===== /SEE OUTPUT CONFIG =====
+// Values: chat (default) atau owner (kirim ke OWNER_NUMBER)
+let SEE_OUTPUT_TARGET = (process.env.SEE_OUTPUT_TARGET || 'chat').trim().toLowerCase();
 
 // ===== AUTO VIEW-ONCE CONFIG =====
 // Format: AUTO_VIEW_ONCE_JIDS=6281234567890,6281234567891,6282988223456
@@ -131,6 +136,7 @@ function reloadEnvConfig() {
     STORY_VIEW_ALL = STORY_AUTO_SENDERS_RAW.includes('*');
     STORY_AUTO_SENDERS = STORY_AUTO_SENDERS_RAW.filter((jid) => jid !== '*');
     OWNER_NUMBER = process.env.OWNER_NUMBER || '';
+    SEE_OUTPUT_TARGET = (process.env.SEE_OUTPUT_TARGET || 'chat').trim().toLowerCase();
     console.log('🔄 Konfigurasi .env berhasil di-reload');
     return true;
   } catch (e) {
@@ -257,6 +263,20 @@ async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage)
 
   await sock.sendMessage(remoteJid, payload, quotedMessage ? { quoted: quotedMessage } : undefined);
   return true;
+}
+
+function getSeeOutputJid(remoteJid) {
+  if (SEE_OUTPUT_TARGET !== 'owner' && SEE_OUTPUT_TARGET !== 'personal') {
+    return remoteJid;
+  }
+
+  const ownerNumber = normalizeJidNumber(OWNER_NUMBER);
+  if (!ownerNumber) {
+    console.warn('[see] SEE_OUTPUT_TARGET meminta owner, tetapi OWNER_NUMBER belum diset; fallback ke chat asal.');
+    return remoteJid;
+  }
+
+  return `${ownerNumber}@s.whatsapp.net`;
 }
 
 async function autoSendViewOnceAsFile(sock, remoteJid, msg) {
@@ -573,6 +593,8 @@ const MENU_CATEGORIES = {
     title: 'MEDIA & FILE',
     commands: [
       { cmd: '/see', desc: 'Kirim file sekali dilihat sebagai file biasa (reply pesan)' },
+      { cmd: '/ukt (caption gambar)', desc: 'Simpan bukti UKT ke Google Drive atau penyimpanan lokal' },
+      { cmd: '/ukt list', desc: 'Lihat tahun dan bulan yang memiliki bukti UKT' },
       { cmd: 'Auto View-Once', desc: 'Otomatis convert view-once dari nomor tertentu' },
       { cmd: 'Auto View Story', desc: 'Otomatis view story dari nomor tertentu' }
     ]
@@ -923,6 +945,18 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
       // Extract text/caption from message (could be empty for pure media messages)
       const chatMessage = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || msg.message.documentMessage?.caption || '';
 
+      // === UKT EVIDENCE ARCHIVE: /ukt with an image caption or /ukt list ===
+      try {
+        const handledUkt = await handleUktCommand(msg, sock, remoteJid, numberUser, chatMessage);
+        if (handledUkt) return;
+      } catch (error) {
+        console.error('[UKT] Command gagal:', error);
+        await sock.sendMessage(remoteJid, {
+          text: `❌ Terjadi kesalahan pada fitur UKT: ${error.message}`,
+        }, { quoted: msg });
+        return;
+      }
+
       // IMPORTANT: Check upload session FIRST before returning on empty chatMessage
       // because media files without caption will have empty chatMessage
       try {
@@ -1160,12 +1194,16 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         }
 
         try {
-          await sendViewOnceAsFile(sock, remoteJid, targetMessage, msg);
-          await sock.sendMessage(
-            remoteJid,
-            { text: 'File telah dikirim sebagai file biasa (tidak sekali dilihat lagi).' },
-            { quoted: msg },
-          );
+          const outputJid = getSeeOutputJid(remoteJid);
+          const outputIsOriginalChat = outputJid === remoteJid;
+          await sendViewOnceAsFile(sock, outputJid, targetMessage, outputIsOriginalChat ? msg : undefined);
+          if (outputIsOriginalChat) {
+            await sock.sendMessage(
+              remoteJid,
+              { text: 'File telah dikirim sebagai file biasa (tidak sekali dilihat lagi).' },
+              { quoted: msg },
+            );
+          }
         } catch (error) {
           console.error('Error downloading/sending view-once media:', error);
           await sock.sendMessage(
@@ -1276,12 +1314,30 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         }
       }
 
-      if (remoteJid.endsWith('@g.us') && chatMessage.startsWith('/ai')) {
-        const messageUser = chatMessage.slice(4).trim();
-        const jawabanAI = await responAI(messageUser, sessionID);
-        console.log(`Jawaban AI: ${jawabanAI}`);
+      if (/^\/ai(?:\s|$)/i.test(chatMessage)) {
+        const messageUser = chatMessage.replace(/^\/ai\b/i, '').trim();
+        try {
+          if (!messageUser) {
+            await sock.sendMessage(remoteJid, {
+              text: '🤖 Kirim pertanyaan setelah /ai.\nContoh: /ai jelaskan perbedaan HTTP dan HTTPS.',
+            }, { quoted: m.messages[0] });
+            return;
+          }
 
-        await sock.sendMessage(remoteJid, { text: jawabanAI }, { quoted: m.messages[0] });
+          await sock.sendMessage(remoteJid, { text: '🤖 Sedang berpikir…' }, { quoted: m.messages[0] });
+          const jawabanAI = await responAI(messageUser, sessionID);
+          // WhatsApp has a per-message text limit; split long model output into chunks.
+          const chunks = jawabanAI.match(/[\s\S]{1,3500}/g) || ['AI tidak mengembalikan jawaban.'];
+          for (const chunk of chunks) {
+            await sock.sendMessage(remoteJid, { text: chunk }, { quoted: m.messages[0] });
+          }
+        } catch (error) {
+          console.error('[AI] Command /ai gagal:', error);
+          await sock.sendMessage(remoteJid, {
+            text: `❌ ${error?.message || 'Terjadi kesalahan saat menghubungi AI.'}`,
+          }, { quoted: m.messages[0] });
+        }
+        return;
       }
 
       if (chatMessage.startsWith('/list')) {

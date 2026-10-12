@@ -10,6 +10,25 @@ Fitur ini memungkinkan bot untuk mengirim kembali file "sekali dilihat" (view-on
 2. Bot akan mengunduh file tersebut dan mengirimkannya kembali sebagai file biasa (non-view-once)
 3. File dapat dilihat berkali-kali setelah itu
 
+## Tujuan Pengiriman
+
+Secara default, file dikirim kembali ke chat tempat `/see` digunakan. Untuk
+mengirim file hasil `/see` ke nomor pribadi owner, atur konfigurasi berikut di
+`.env`:
+
+```env
+SEE_OUTPUT_TARGET=owner
+OWNER_NUMBER=6281234567890
+```
+
+Nilai yang tersedia:
+- `chat` (default): kirim ke chat asal
+- `owner` atau `personal`: kirim ke `OWNER_NUMBER`
+
+Pesan konfirmasi tetap dikirim ke chat tempat `/see` digunakan. Jika
+`SEE_OUTPUT_TARGET=owner` tetapi `OWNER_NUMBER` kosong, bot otomatis kembali ke
+chat asal.
+
 ### Contoh:
 ```
 User A mengirim foto sekali dilihat

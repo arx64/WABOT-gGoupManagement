@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node index.js",
     "tray": "electron tray.cjs",
-    "test": "node --test utils/viewOnce.test.js"
+    "test": "node --test gpt.test.js uktManager.test.js utils/viewOnce.test.js"
   },
   "keywords": [],
   "author": "",
