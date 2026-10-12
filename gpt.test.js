@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { responAI } from './gpt.js';
 
-const envKeys = ['NINE_ROUTER_BASE_URL', 'NINE_ROUTER_MODEL', 'NINE_ROUTER_API_KEY'];
+const envKeys = ['NINE_ROUTER_BASE_URL', 'NINE_ROUTER_MODEL', 'NINE_ROUTER_API_KEY', 'NINE_ROUTER_FALLBACK_MODELS'];
 
 function withEnv(values, run) {
   const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
@@ -80,6 +80,72 @@ test('responAI exposes useful errors from a non-success API response', async () 
     console.error = () => {};
     try {
       await assert.rejects(responAI('Tes'), /9Router HTTP 404: unknown model/);
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.error = originalConsoleError;
+    }
+  });
+});
+
+test('responAI falls back to the next model when 9Router reports an unsupported model', async () => {
+  await withEnv({
+    NINE_ROUTER_BASE_URL: 'http://localhost:20128/v1',
+    NINE_ROUTER_MODEL: 'AI-WhatsAppBot',
+    NINE_ROUTER_FALLBACK_MODELS: 'cx/gpt-5.6-luna,backup/model',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    const originalWarn = console.warn;
+    const requestedModels = [];
+    globalThis.fetch = async (_url, options) => {
+      const { model } = JSON.parse(options.body);
+      requestedModels.push(model);
+      if (model === 'AI-WhatsAppBot') {
+        return {
+          ok: false,
+          status: 403,
+          statusText: 'Forbidden',
+          json: async () => ({ error: { message: 'Unsupported model mimo-auto' } }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ choices: [{ message: { content: 'Fallback berhasil' } }] }),
+      };
+    };
+    console.warn = () => {};
+
+    try {
+      assert.equal(await responAI('Tes fallback'), 'Fallback berhasil');
+      assert.deepEqual(requestedModels, ['AI-WhatsAppBot', 'cx/gpt-5.6-luna']);
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.warn = originalWarn;
+    }
+  });
+});
+
+test('responAI does not fall back for an unrelated authorization error', async () => {
+  await withEnv({
+    NINE_ROUTER_MODEL: 'AI-WhatsAppBot',
+    NINE_ROUTER_FALLBACK_MODELS: 'cx/gpt-5.6-luna',
+  }, async () => {
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    let requests = 0;
+    globalThis.fetch = async () => {
+      requests += 1;
+      return {
+        ok: false,
+        status: 403,
+        statusText: 'Forbidden',
+        json: async () => ({ error: { message: 'Invalid API key' } }),
+      };
+    };
+    console.error = () => {};
+    try {
+      await assert.rejects(responAI('Tes'), /Invalid API key/);
+      assert.equal(requests, 1);
     } finally {
       globalThis.fetch = originalFetch;
       console.error = originalConsoleError;

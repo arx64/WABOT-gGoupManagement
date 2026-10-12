@@ -67,7 +67,7 @@ PORT=2004
 Variabel penting yang tersedia di `.env.example` antara lain:
 
 - `PORT` — port QR viewer.
-- `NINE_ROUTER_BASE_URL`, `NINE_ROUTER_MODEL`, dan `NINE_ROUTER_API_KEY` — endpoint, model, dan autentikasi untuk command `/ai` melalui 9Router lokal.
+- `NINE_ROUTER_BASE_URL`, `NINE_ROUTER_MODEL`, `NINE_ROUTER_FALLBACK_MODELS`, dan `NINE_ROUTER_API_KEY` — endpoint, model utama, daftar model cadangan (dipisahkan koma), dan autentikasi untuk command `/ai` melalui 9Router lokal. Fallback dicoba otomatis saat error menunjukkan model tidak tersedia.
 - `UKT_MONTHS` — daftar bulan pembayaran UKT yang dipantau, misalnya `Januari,Maret,April,Mei,Juni`; dapat menggunakan nama bulan atau angka 1–12.
 - `UKT_DRIVE_ROOT_FOLDER_ID` — folder induk Google Drive opsional khusus arsip UKT. Jika kosong, fitur menggunakan `GOOGLE_DRIVE_FOLDER_ID` atau root My Drive.
 - `OWNER_NUMBER` — nomor pemilik bot tanpa tanda `+`.
