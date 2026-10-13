@@ -69,7 +69,7 @@ Variabel penting yang tersedia di `.env.example` antara lain:
 - `PORT` — port QR viewer.
 - `NINE_ROUTER_BASE_URL`, `NINE_ROUTER_MODEL`, `NINE_ROUTER_FALLBACK_MODELS`, dan `NINE_ROUTER_API_KEY` — endpoint, model utama, daftar model cadangan (dipisahkan koma), dan autentikasi untuk command `/ai` melalui 9Router lokal. Fallback dicoba otomatis saat error menunjukkan model tidak tersedia.
 - `UKT_MONTHS` — daftar bulan pembayaran UKT yang dipantau, misalnya `Januari,Maret,April,Mei,Juni`; dapat menggunakan nama bulan atau angka 1–12.
-- `UKT_DRIVE_ROOT_FOLDER_ID` — folder induk Google Drive opsional khusus arsip UKT. Jika kosong, fitur menggunakan `GOOGLE_DRIVE_FOLDER_ID` atau root My Drive.
+- `UKT_DRIVE_ROOT_FOLDER_ID` — folder induk Google Drive opsional khusus arsip UKT. Di dalamnya bot membuat `UKT Yulia Khairani/Tahun/Bulan`. Jika kosong, fitur menggunakan `GOOGLE_DRIVE_FOLDER_ID` atau root My Drive.
 - `OWNER_NUMBER` — nomor pemilik bot tanpa tanda `+`.
 - `DELETED_MESSAGE_DETECTION` — aktif/nonaktifkan deteksi pesan yang dihapus.
 - `AUTO_VIEW_ONCE_JIDS` — daftar nomor untuk auto-view-once.
@@ -118,7 +118,7 @@ Ketik `/menu` untuk melihat menu lengkap. Perintah utama meliputi:
 - `/see` — mengirim pesan view-once sebagai file biasa melalui reply.
 - `/ukt list` — menampilkan tahun dan bulan yang memiliki bukti UKT.
 
-Kirim gambar dengan caption `/ukt` untuk mengarsipkan bukti pembayaran. Bot membuat folder `Tahun/Bulan` di Google Drive; jika upload Drive gagal, gambar disimpan pada `uploads/ukt/Tahun/Bulan` di komputer bot.
+Kirim gambar dengan caption `/ukt` untuk mengarsipkan bukti pembayaran. Bot membuat folder `UKT Yulia Khairani/Tahun/Bulan` di Google Drive; folder tahun/bulan lama di root tetap dibaca oleh `/ukt list`. Jika upload Drive gagal, gambar disimpan pada `uploads/ukt/Tahun/Bulan` di komputer bot.
 
 ### Owner
 

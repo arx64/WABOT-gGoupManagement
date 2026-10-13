@@ -8,6 +8,7 @@ import {
   getUktDateParts,
   getUktLocalDirectory,
   getUktMonthName,
+  ensureUktDriveFolder,
   listUktPayments,
   sanitizeUktFilename,
 } from './uktManager.js';
@@ -33,6 +34,40 @@ test('date and folder helpers use year and Indonesian month in the configured ti
   });
   assert.equal(getUktMonthName(11), 'November');
   assert.equal(getUktLocalDirectory('D:/bot', 2026, 10), path.join('D:/bot', 'uploads', 'ukt', '2026', 'Oktober'));
+});
+
+test('Google Drive UKT uploads use UKT Yulia Khairani/year/month folders', async () => {
+  const previousRoot = process.env.UKT_DRIVE_ROOT_FOLDER_ID;
+  const previousFolder = process.env.GOOGLE_DRIVE_FOLDER_ID;
+  process.env.UKT_DRIVE_ROOT_FOLDER_ID = 'parent-root-id';
+  delete process.env.GOOGLE_DRIVE_FOLDER_ID;
+  const createdFolders = [];
+  let nextId = 1;
+  const drive = {
+    files: {
+      list: async () => ({ data: { files: [] } }),
+      create: async ({ requestBody }) => {
+        const folder = { id: `folder-${nextId++}`, ...requestBody };
+        createdFolders.push(folder);
+        return { data: { id: folder.id, name: folder.name } };
+      },
+    },
+  };
+
+  try {
+    const result = await ensureUktDriveFolder(drive, 2026, 10);
+    assert.deepEqual(createdFolders.map(({ name, parents }) => ({ name, parents })), [
+      { name: 'UKT Yulia Khairani', parents: ['parent-root-id'] },
+      { name: '2026', parents: ['folder-1'] },
+      { name: 'Oktober', parents: ['folder-2'] },
+    ]);
+    assert.deepEqual(result, { yearId: 'folder-2', monthId: 'folder-3', monthName: 'Oktober' });
+  } finally {
+    if (previousRoot === undefined) delete process.env.UKT_DRIVE_ROOT_FOLDER_ID;
+    else process.env.UKT_DRIVE_ROOT_FOLDER_ID = previousRoot;
+    if (previousFolder === undefined) delete process.env.GOOGLE_DRIVE_FOLDER_ID;
+    else process.env.GOOGLE_DRIVE_FOLDER_ID = previousFolder;
+  }
 });
 
 test('UKT filename sanitization removes path traversal and invalid filename characters', () => {

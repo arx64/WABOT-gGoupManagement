@@ -8,6 +8,7 @@ import { getDriveClient } from './utils/driveClient.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEFAULT_MONTHS = [1, 3, 4, 5, 6];
+const UKT_ARCHIVE_FOLDER_NAME = 'UKT Yulia Khairani';
 const MONTH_NAMES = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
   'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
@@ -88,7 +89,7 @@ async function ensureDriveFolder(drive, name, parentId = null) {
     `name = '${String(name).replace(/'/g, "\\'")}'`,
     'trashed = false',
   ];
-  if (parentId) clauses.push(`'${String(parentId).replace(/'/g, "\\'")}' in parents`);
+  clauses.push(`'${String(parentId || 'root').replace(/'/g, "\\'")}' in parents`);
 
   const result = await drive.files.list({
     q: clauses.join(' and '),
@@ -114,7 +115,8 @@ async function ensureDriveFolder(drive, name, parentId = null) {
 
 export async function ensureUktDriveFolder(drive, year, month) {
   const rootId = getRootDriveFolderId();
-  const yearId = await ensureDriveFolder(drive, String(year), rootId || null);
+  const archiveId = await ensureDriveFolder(drive, UKT_ARCHIVE_FOLDER_NAME, rootId || null);
+  const yearId = await ensureDriveFolder(drive, String(year), archiveId);
   const monthName = getUktMonthName(month);
   const monthId = await ensureDriveFolder(drive, monthName, yearId);
   return { yearId, monthId, monthName };
@@ -247,17 +249,40 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
     try {
       const drive = getDriveClient();
       const rootId = getRootDriveFolderId();
-      const qParts = ["mimeType = 'application/vnd.google-apps.folder'", "trashed = false"];
-      if (rootId) qParts.push(`'${rootId.replace(/'/g, "\\'")}' in parents`);
-      const yearsResponse = await drive.files.list({
-        q: qParts.join(' and '),
-        pageSize: 1000,
-        orderBy: 'name',
-        fields: 'files(id,name,mimeType)',
-        ...(rootId ? {} : { corpora: 'user' }),
+      const archiveQuery = [
+        "mimeType = 'application/vnd.google-apps.folder'",
+        `name = '${UKT_ARCHIVE_FOLDER_NAME}'`,
+        "trashed = false",
+        `'${String(rootId || 'root').replace(/'/g, "\\'")}' in parents`,
+      ];
+      const archiveResponse = await drive.files.list({
+        q: archiveQuery.join(' and '),
+        pageSize: 100,
+        fields: 'files(id,name,mimeType,parents)',
+        ...(!rootId ? { corpora: 'user' } : {}),
       });
-      const years = (yearsResponse.data.files || []).filter((item) => /^\d{4}$/.test(item.name));
-      for (const yearFolder of years) {
+      const archiveId = archiveResponse.data.files?.[0]?.id;
+      // Read the new archive folder and legacy root-level year folders so old uploads remain visible.
+      const yearParentIds = [...new Set([rootId || 'root', ...(archiveId ? [archiveId] : [])])];
+      const yearFoldersById = new Map();
+      for (const parentId of yearParentIds) {
+        const qParts = [
+          "mimeType = 'application/vnd.google-apps.folder'",
+          "trashed = false",
+          `'${String(parentId).replace(/'/g, "\\'")}' in parents`,
+        ];
+        const yearsResponse = await drive.files.list({
+          q: qParts.join(' and '),
+          pageSize: 1000,
+          orderBy: 'name',
+          fields: 'files(id,name,mimeType)',
+          ...(!rootId && parentId === 'root' ? { corpora: 'user' } : {}),
+        });
+        for (const item of yearsResponse.data.files || []) {
+          if (/^\d{4}$/.test(item.name)) yearFoldersById.set(item.id, item);
+        }
+      }
+      for (const yearFolder of yearFoldersById.values()) {
         const monthResponse = await drive.files.list({
           q: `'${yearFolder.id}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
           pageSize: 1000,
@@ -331,7 +356,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
 
   const dateParts = getUktDateParts();
   await sock.sendMessage(remoteJid, {
-    text: `🎓 Menerima bukti UKT. Menyimpan ke folder ${dateParts.year}/${dateParts.monthName}…`,
+    text: `🎓 Menerima bukti UKT. Menyimpan ke folder ${UKT_ARCHIVE_FOLDER_NAME}/${dateParts.year}/${dateParts.monthName}…`,
   }, { quoted: messageObj });
 
   let buffer;
@@ -395,7 +420,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
   }
 
   const where = record.source === 'drive'
-    ? `Google Drive (${dateParts.year}/${dateParts.monthName})\n${record.driveLink}`
+    ? `Google Drive (${UKT_ARCHIVE_FOLDER_NAME}/${dateParts.year}/${dateParts.monthName})\n${record.driveLink}`
     : `penyimpanan lokal (${dateParts.year}/${dateParts.monthName})\n${record.localPath}\n⚠️ Google Drive gagal: file tetap tersimpan di bot.`;
   await sock.sendMessage(remoteJid, {
     text: `✅ *Bukti UKT berhasil disimpan*\n\n📅 Periode: ${dateParts.monthName} ${dateParts.year}\n📄 File: ${record.filename}\n📁 Lokasi: ${where}`,
