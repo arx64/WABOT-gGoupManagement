@@ -7,7 +7,8 @@ import { getDriveClient } from './utils/driveClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const DEFAULT_MONTHS = [1, 3, 4, 5, 6];
+// Months in the UKT installment schedule: Jan, Mar-Jul, Sep-Dec (no Feb/Aug).
+const DEFAULT_MONTHS = [1, 3, 4, 5, 6, 7, 9, 10, 11, 12];
 const UKT_ARCHIVE_FOLDER_NAME = 'UKT Yulia Khairani';
 const MONTH_NAMES = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',

@@ -13,10 +13,11 @@ import {
   sanitizeUktFilename,
 } from './uktManager.js';
 
-test('default UKT periods are January, March, April, May and June', () => {
-  assert.deepEqual(getConfiguredUktMonths(''), [1, 3, 4, 5, 6]);
-  assert.deepEqual(getConfiguredUktMonths(undefined), [1, 3, 4, 5, 6]);
-  assert.deepEqual(getConfiguredUktMonths('Januari,Maret,April,Mei,Juni'), [1, 3, 4, 5, 6]);
+test('default UKT periods match the installment schedule', () => {
+  const scheduleMonths = [1, 3, 4, 5, 6, 7, 9, 10, 11, 12];
+  assert.deepEqual(getConfiguredUktMonths(''), scheduleMonths);
+  assert.deepEqual(getConfiguredUktMonths(undefined), scheduleMonths);
+  assert.deepEqual(getConfiguredUktMonths('Januari,Maret,April,Mei,Juni,Juli,September,Oktober,November,Desember'), scheduleMonths);
 });
 
 test('UKT period configuration supports numeric months and deduplicates entries', () => {
