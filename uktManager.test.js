@@ -8,6 +8,8 @@ import {
   getUktDateParts,
   getUktLocalDirectory,
   getUktMonthName,
+  getUktInstallmentAmount,
+  formatUktRupiah,
   ensureUktDriveFolder,
   listUktPayments,
   sanitizeUktFilename,
@@ -18,6 +20,16 @@ test('default UKT periods match the installment schedule', () => {
   assert.deepEqual(getConfiguredUktMonths(''), scheduleMonths);
   assert.deepEqual(getConfiguredUktMonths(undefined), scheduleMonths);
   assert.deepEqual(getConfiguredUktMonths('Januari,Maret,April,Mei,Juni,Juli,September,Oktober,November,Desember'), scheduleMonths);
+});
+
+test('UKT installment amounts match the provided schedule and format as Indonesian rupiah', () => {
+  assert.equal(getUktInstallmentAmount(9), 1_500_000);
+  assert.equal(getUktInstallmentAmount(3), 1_500_000);
+  for (const month of [1, 4, 5, 6, 7, 10, 11, 12]) {
+    assert.equal(getUktInstallmentAmount(month), 500_000);
+  }
+  assert.equal(formatUktRupiah(getUktInstallmentAmount(10)), 'Rp500.000');
+  assert.equal(formatUktRupiah(getUktInstallmentAmount(9)), 'Rp1.500.000');
 });
 
 test('UKT period configuration supports numeric months and deduplicates entries', () => {

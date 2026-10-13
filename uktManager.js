@@ -10,6 +10,18 @@ const __dirname = path.dirname(__filename);
 // Months in the UKT installment schedule: Jan, Mar-Jul, Sep-Dec (no Feb/Aug).
 const DEFAULT_MONTHS = [1, 3, 4, 5, 6, 7, 9, 10, 11, 12];
 const UKT_ARCHIVE_FOLDER_NAME = 'UKT Yulia Khairani';
+const UKT_INSTALLMENT_AMOUNTS = {
+  1: 500_000,
+  3: 1_500_000,
+  4: 500_000,
+  5: 500_000,
+  6: 500_000,
+  7: 500_000,
+  9: 1_500_000,
+  10: 500_000,
+  11: 500_000,
+  12: 500_000,
+};
 const MONTH_NAMES = [
   'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
   'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember',
@@ -34,6 +46,14 @@ export function getConfiguredUktMonths(value = process.env.UKT_MONTHS) {
 
 export function getUktMonthName(month) {
   return MONTH_NAMES[Number(month) - 1] || 'Bulan tidak dikenal';
+}
+
+export function getUktInstallmentAmount(month) {
+  return UKT_INSTALLMENT_AMOUNTS[Number(month)] ?? 0;
+}
+
+export function formatUktRupiah(amount) {
+  return `Rp${Number(amount).toLocaleString('id-ID')}`;
 }
 
 export function getUktDateParts(date = new Date(), timeZone = process.env.TZ || 'Asia/Jakarta') {
@@ -327,7 +347,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
     const lines = [];
     for (const year of years) {
       const monthsForYear = months.filter((month) => paidPeriods.has(`${year}-${month}`));
-      lines.push(`*${year}*`, ...monthsForYear.map((month) => `✅ ${getUktMonthName(month)}`), '');
+      lines.push(`*${year}*`, ...monthsForYear.map((month) => `✅ ${getUktMonthName(month)} — ${formatUktRupiah(getUktInstallmentAmount(month))}`), '');
     }
     let response = `🎓 *DAFTAR BUKTI PEMBAYARAN UKT*\n\n`;
     if (lines.length) response += `${lines.join('\n').trim()}\n\n`;
@@ -336,7 +356,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
     if (years.length) {
       const notRecorded = years.flatMap((year) => months
         .filter((month) => !paidPeriods.has(`${year}-${month}`))
-        .map((month) => `• ${getUktMonthName(month)} ${year}`));
+        .map((month) => `• ${getUktMonthName(month)} ${year} — ${formatUktRupiah(getUktInstallmentAmount(month))}`));
       if (notRecorded.length) {
         response += `\nBelum ada bukti untuk:\n${notRecorded.join('\n')}\n`;
       }
