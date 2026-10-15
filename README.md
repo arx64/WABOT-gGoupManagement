@@ -72,6 +72,7 @@ Variabel penting yang tersedia di `.env.example` antara lain:
 - `UKT_DRIVE_ROOT_FOLDER_ID` — folder induk Google Drive opsional khusus arsip UKT. Di dalamnya bot membuat `UKT Yulia Khairani/Tahun/Bulan`. Jika kosong, fitur menggunakan `GOOGLE_DRIVE_FOLDER_ID` atau root My Drive.
 - `OWNER_NUMBER` — nomor pemilik bot tanpa tanda `+`.
 - `DELETED_MESSAGE_DETECTION` — aktif/nonaktifkan deteksi pesan yang dihapus.
+- Notifikasi pesan yang dihapus di chat `OWNER_NUMBER` otomatis dijadwalkan untuk dihapus setelah 24 jam; antrean jadwal disimpan agar tetap berjalan setelah bot restart.
 - `AUTO_VIEW_ONCE_JIDS` — daftar nomor untuk auto-view-once.
 - `AUTO_VIEW_STORY_JIDS` — daftar nomor untuk auto-view story; gunakan `*` untuk semua story.
 - `SEE_OUTPUT_TARGET` — tujuan output command `/see`, yaitu `chat` atau `owner`.

@@ -35,6 +35,7 @@ import {
   stopSendScheduler,
 } from './sendScheduler.js';
 import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
+import { scheduleDeletedNotificationExpiry, startDeletedNotificationExpiry } from './utils/deletedNotificationExpiry.js';
 import { extractViewOnceContent } from './utils/viewOnce.js';
 import { handleUktCommand } from './uktManager.js';
 
@@ -775,6 +776,7 @@ async function connectToWhatsApp() {
       }
 
       console.log('✅ Terhubung ke WhatsApp!');
+      startDeletedNotificationExpiry(sock);
       // start scheduler when connection opens
       try {
         startScheduler(sock).catch((err) => console.error('startScheduler failed:', err));
@@ -2988,9 +2990,10 @@ ${soal.soal}`,
                   : `📍 *Lokasi:* Private Chat (${remoteJid.split('@')[0]})`;
                 
                 // Kirim ke owner
-                await sock.sendMessage(ownerJid, {
+                const sentNotification = await sock.sendMessage(ownerJid, {
                   text: `${notification}\n\n${chatSource}`
                 });
+                await scheduleDeletedNotificationExpiry(ownerJid, sentNotification?.key);
                 
                 console.log(`✅ Pesan dihapus terdeteksi di ${remoteJid} dan dilaporkan ke owner ${OWNER_NUMBER}`);
               } else {
