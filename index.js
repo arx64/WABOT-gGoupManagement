@@ -280,6 +280,22 @@ function getSeeOutputJid(remoteJid) {
   return `${ownerNumber}@s.whatsapp.net`;
 }
 
+function getDeletedMessageMedia(message) {
+  let content = message?.message;
+  // Pesan WhatsApp bisa membungkus media dengan ephemeral/view-once wrappers.
+  for (let depth = 0; content && depth < 6; depth += 1) {
+    if (content.imageMessage) return { type: 'image', message: content.imageMessage };
+    if (content.videoMessage) return { type: 'video', message: content.videoMessage };
+    if (content.ephemeralMessage?.message) content = content.ephemeralMessage.message;
+    else if (content.viewOnceMessage?.message) content = content.viewOnceMessage.message;
+    else if (content.viewOnceMessageV2?.message) content = content.viewOnceMessageV2.message;
+    else if (content.viewOnceMessageV2Extension?.message) content = content.viewOnceMessageV2Extension.message;
+    else if (content.documentWithCaptionMessage?.message) content = content.documentWithCaptionMessage.message;
+    else break;
+  }
+  return null;
+}
+
 async function autoSendViewOnceAsFile(sock, remoteJid, msg) {
   try {
     const viewOnce = extractViewOnceContent(msg);
@@ -2994,6 +3010,33 @@ ${soal.soal}`,
                   text: `${notification}\n\n${chatSource}`
                 });
                 await scheduleDeletedNotificationExpiry(ownerJid, sentNotification?.key);
+
+                // Untuk private chat, ikutkan foto/video asli jika tersedia.
+                // Media dikirim sebagai pesan terpisah supaya masing-masing bisa dihapus setelah 24 jam.
+                if (!isGroup) {
+                  const media = getDeletedMessageMedia(cachedData.message);
+                  if (media) {
+                    try {
+                      const buffer = await downloadMediaMessage(
+                        cachedData.message,
+                        'buffer',
+                        {},
+                        { reuploadRequest: sock.updateMediaMessage },
+                      );
+                      const mediaPayload = media.type === 'image'
+                        ? { image: buffer, ...(media.message.caption ? { caption: media.message.caption } : {}) }
+                        : { video: buffer, ...(media.message.caption ? { caption: media.message.caption } : {}), mimetype: media.message.mimetype || 'video/mp4' };
+                      const sentMedia = await sock.sendMessage(ownerJid, mediaPayload);
+                      await scheduleDeletedNotificationExpiry(ownerJid, sentMedia?.key);
+                    } catch (mediaError) {
+                      console.warn('[deleted-message] Media foto/video tidak dapat diteruskan ke owner:', mediaError.message);
+                      const sentWarning = await sock.sendMessage(ownerJid, {
+                        text: `⚠️ Foto/video dari pesan yang dihapus tidak berhasil dilampirkan. Detail: ${mediaError.message}`,
+                      });
+                      await scheduleDeletedNotificationExpiry(ownerJid, sentWarning?.key);
+                    }
+                  }
+                }
                 
                 console.log(`✅ Pesan dihapus terdeteksi di ${remoteJid} dan dilaporkan ke owner ${OWNER_NUMBER}`);
               } else {
