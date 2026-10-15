@@ -18,8 +18,7 @@ test('deleted-message notification is scheduled for 24 hours and deleted when du
     const scheduled = JSON.parse(await fs.readFile(filePath, 'utf8'));
     assert.equal(scheduled[0].deleteAt, currentTime + DELETED_NOTIFICATION_TTL_MS);
 
-    manager.start(socket);
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    manager.start(socket, { processImmediately: false });
     await manager.processDue();
     assert.equal(deleted.length, 0);
 
@@ -43,8 +42,7 @@ test('failed delete stays queued for retry', async () => {
   try {
     await manager.schedule('628123@s.whatsapp.net', { id: 'MSG-RETRY' });
     currentTime += DELETED_NOTIFICATION_TTL_MS;
-    manager.start({ sendMessage: async () => { throw new Error('temporary error'); } });
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    manager.start({ sendMessage: async () => { throw new Error('temporary error'); } }, { processImmediately: false });
     await manager.processDue();
     const queue = JSON.parse(await fs.readFile(filePath, 'utf8'));
     assert.equal(queue.length, 1);

@@ -79,13 +79,13 @@ export function createDeletedNotificationExpiry({
     }
   }
 
-  function start(socket) {
+  function start(socket, { processImmediately = true } = {}) {
     activeSocket = socket;
     if (!timer) {
       timer = setInterval(() => { void processDue(); }, intervalMs);
       timer.unref?.();
     }
-    void processDue();
+    if (processImmediately) void processDue();
   }
 
   return { schedule, processDue, start };
