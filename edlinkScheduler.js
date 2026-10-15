@@ -21,8 +21,8 @@ const TZ = process.env.TIMEZONE || 'Asia/Jakarta';
 // EDLINK_NOTIFY_JID - JID to send reminders to (group or user)
 
 const EDLINK_URL = 'https://api.edlink.id/api/v1.4/home/openassignmentsandquizes';
-const EDLINK_FETCH_TIMEOUT_MS = Number(process.env.EDLINK_FETCH_TIMEOUT_MS || 30000);
-const EDLINK_FETCH_RETRIES = Number(process.env.EDLINK_FETCH_RETRIES || 2);
+const EDLINK_FETCH_TIMEOUT_MS = Number(process.env.EDLINK_FETCH_TIMEOUT_MS || 60000);
+const EDLINK_FETCH_RETRIES = Number(process.env.EDLINK_FETCH_RETRIES || 3);
 
 let edlinkInterval = null;
 let edlinkFetchRunning = false;
@@ -35,11 +35,36 @@ async function fetchEdlink(url, options) {
     const timeout = setTimeout(() => controller.abort(), EDLINK_FETCH_TIMEOUT_MS);
 
     try {
-      return await fetch(url, { ...options, signal: controller.signal });
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      // Consume the body while the timeout is still active; fetch() alone only
+      // guarantees that response headers have arrived, not that the body did.
+      const responseText = await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        json: async () => responseText ? JSON.parse(responseText) : {},
+      };
     } catch (err) {
-      const retryable = err?.name === 'AbortError' || err?.cause?.code === 'UND_ERR_CONNECT_TIMEOUT' || err?.cause?.code === 'UND_ERR_SOCKET';
+      const errorCodes = new Set([
+        'ETIMEDOUT',
+        'ECONNRESET',
+        'ECONNREFUSED',
+        'EAI_AGAIN',
+        'ENETUNREACH',
+        'UND_ERR_CONNECT_TIMEOUT',
+        'UND_ERR_HEADERS_TIMEOUT',
+        'UND_ERR_BODY_TIMEOUT',
+        'UND_ERR_SOCKET',
+      ]);
+      let cause = err;
+      let retryable = err?.name === 'AbortError';
+      for (let depth = 0; cause && depth < 5; depth += 1, cause = cause.cause) {
+        if (errorCodes.has(cause.code)) retryable = true;
+      }
       if (!retryable || attempt === EDLINK_FETCH_RETRIES) throw err;
-      await delay(1000 * (attempt + 1));
+      const waitMs = 1000 * (2 ** attempt);
+      console.warn(`[Edlink] Request gagal (${err?.cause?.code || err?.code || err?.name || 'network error'}), percobaan ${attempt + 1}/${EDLINK_FETCH_RETRIES}; mencoba lagi dalam ${waitMs / 1000}s.`);
+      await delay(waitMs);
     } finally {
       clearTimeout(timeout);
     }
@@ -103,15 +128,18 @@ async function startEdlinkScheduler(sock, opts = {}) {
           'Authorization': `Bearer ${bearer}`,
           'accept': 'application/json, text/plain, */*',
           'x-app-locale': 'id',
-          'x-referer': 'https://edlink.id/classes',
+          'x-referer': 'https://edlink.id/panel/',
           'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+          'cache-control': 'no-cache',
+          pragma: 'no-cache',
+          priority: 'u=1, i',
           origin: 'https://edlink.id',
           referer: 'https://edlink.id/',
         },
         body: JSON.stringify({
           dataProvider: JSON.stringify({
             criterion: [],
-            page: { count: 0, current: 1, limit: 100, next: 0, previous: 0, total: 0 },
+            page: { count: 0, current: 1, limit: 5, next: 0, previous: 0, total: 0 },
             sort: [],
           }),
           accept_assessment_team: true,
