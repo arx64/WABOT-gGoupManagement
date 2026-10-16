@@ -45,32 +45,42 @@ function saveBearerToken(token) {
 async function  loginEdlink(opts = {}) {
   const email = process.env.EDLINK_EMAIL || opts.email;
   const password = process.env.EDLINK_PASSWORD || opts.password;
+  const debug = typeof opts.debug === 'function' ? opts.debug : null;
+  const trace = (label, value) => { if (debug) debug(`SSO ${label}`, value); };
   if (!email || !password) throw new Error('EDLINK_EMAIL dan EDLINK_PASSWORD belum dikonfigurasi');
 
+  const loginBody = {
+    username: '', app_id: '', email, password, web_reg_id: null,
+    device: JSON.stringify({ secureId: 'zoom-reminder', name: 'Node.js', manufacture: 'Node.js', model: 'Node.js', product: 'zoom-reminder', hardware: process.platform, version: process.version, regId: null }),
+  };
+  trace('SITE LOGIN REQUEST', { url: EDLINK_SITE_LOGIN_URL, method: 'POST', headers: edlinkHeaders({ 'x-referer': 'https://www.edlink.id/login' }), body: loginBody });
   const loginResponse = await fetch(EDLINK_SITE_LOGIN_URL, {
     method: 'POST',
     headers: edlinkHeaders({ 'x-referer': 'https://www.edlink.id/login' }),
-    body: JSON.stringify({
-      username: '', app_id: '', email, password, web_reg_id: null,
-      device: JSON.stringify({ secureId: 'zoom-reminder', name: 'Node.js', manufacture: 'Node.js', model: 'Node.js', product: 'zoom-reminder', hardware: process.platform, version: process.version, regId: null }),
-    }),
+    body: JSON.stringify(loginBody),
   });
   const loginPayload = await loginResponse.json().catch(() => ({}));
+  trace('SITE LOGIN RESPONSE', { url: EDLINK_SITE_LOGIN_URL, status: loginResponse.status, statusText: loginResponse.statusText, headers: Object.fromEntries(loginResponse.headers.entries()), body: loginPayload });
   const token = loginPayload?.data?.userToken?.token;
   if (!loginResponse.ok || !token) throw new Error(`EdLink login gagal (${loginResponse.status})`);
 
+  const ssoBody = { email, password, redirect_uri: `https://api.edlink.id/sso/auth?token=${encodeURIComponent(token)}` };
+  trace('SSO LOGIN REQUEST', { url: EDLINK_SSO_LOGIN_URL, method: 'POST', headers: edlinkHeaders({ 'x-referer': 'https://www.edlink.id/login' }), body: ssoBody });
   const ssoResponse = await fetch(EDLINK_SSO_LOGIN_URL, {
     method: 'POST',
     headers: edlinkHeaders({ 'x-referer': 'https://www.edlink.id/login' }),
-    body: JSON.stringify({ email, password, redirect_uri: `https://api.edlink.id/sso/auth?token=${encodeURIComponent(token)}` }),
+    body: JSON.stringify(ssoBody),
   });
   const ssoPayload = await ssoResponse.json().catch(() => ({}));
+  trace('SSO LOGIN RESPONSE', { url: EDLINK_SSO_LOGIN_URL, status: ssoResponse.status, statusText: ssoResponse.statusText, headers: Object.fromEntries(ssoResponse.headers.entries()), body: ssoPayload });
   let authUrl = ssoPayload?.data?.url;
   if (!ssoResponse.ok || !authUrl) throw new Error(`EdLink SSO login gagal (${ssoResponse.status})`);
 
   for (let redirect = 0; redirect < 10; redirect += 1) {
+    trace('REDIRECT REQUEST', { redirect: redirect + 1, url: authUrl, method: 'GET', redirectMode: 'manual', headers: edlinkHeaders() });
     const response = await fetch(authUrl, { redirect: 'manual', headers: edlinkHeaders() });
     const location = response.headers.get('location');
+    trace('REDIRECT RESPONSE', { redirect: redirect + 1, url: authUrl, status: response.status, statusText: response.statusText, headers: Object.fromEntries(response.headers.entries()), location });
     if (!location) break;
     authUrl = new URL(location, authUrl).toString();
     const authTarget = new URL(authUrl);

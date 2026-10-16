@@ -571,7 +571,7 @@ const MENU_CATEGORIES = {
     title: 'REMINDER',
     commands: [
       { cmd: '/list', desc: 'Lihat semua jadwal reminder' },
-      { cmd: '/addList "Nama Kuliah" <Link> <Jam> <Hari>', desc: 'Tambah jadwal ke database' },
+      { cmd: '/addList "Mata Kuliah" <Zoom Link> <Jam> <Hari>', desc: 'Tambah jadwal reminder (contoh: /addList "Pemrograman Web" https://zoom.us/j/123456789 09:30 Senin)' },
       { cmd: '/delete <ID>', desc: 'Hapus reminder' }
     ]
   },
@@ -1393,7 +1393,13 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
             { quoted: m.messages[0] },
           );
         } else {
-          await sock.sendMessage(remoteJid, { text: 'Format salah! Gunakan: /addList "Mata Kuliah" <Zoom Link> <Jam> <Hari>' }, { quoted: m.messages[0] });
+          await sock.sendMessage(
+            remoteJid,
+            {
+              text: 'Format salah! Gunakan format berikut:\n/addList "Mata Kuliah" <Zoom Link> <Jam> <Hari>\n\nContoh yang benar:\n/addList "Pemrograman Web" https://zoom.us/j/123456789 09:30 Senin\n\nPetunjuk pengisian:\n• Mata Kuliah: tulis di dalam tanda kutip, misalnya "Pemrograman Web".\n• Zoom Link: masukkan link Zoom lengkap yang diawali https://, misalnya https://zoom.us/j/123456789.\n• Jam: gunakan format HH:MM, misalnya 09:30 atau 13:45.\n• Hari: tulis nama hari, misalnya Senin atau Senin,Rabu.\n\nPastikan urutannya: nama mata kuliah, link Zoom, jam, lalu hari.'
+            },
+            { quoted: m.messages[0] },
+          );
         }
       }
 

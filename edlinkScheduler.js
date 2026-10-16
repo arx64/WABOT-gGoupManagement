@@ -22,12 +22,76 @@ const TZ = process.env.TIMEZONE || 'Asia/Jakarta';
 
 const EDLINK_URL = 'https://api.edlink.id/api/v1.4/home/openassignmentsandquizes';
 const EDLINK_FETCH_TIMEOUT_MS = Number(process.env.EDLINK_FETCH_TIMEOUT_MS || 60000);
-const EDLINK_FETCH_RETRIES = Number(process.env.EDLINK_FETCH_RETRIES || 3);
+const EDLINK_FETCH_RETRIES = Number(process.env.EDLINK_FETCH_RETRIES || 4);
+const EDLINK_REFRESH_RETRIES = Number(process.env.EDLINK_REFRESH_RETRIES || 3);
+const EDLINK_DEBUG_LOGS = !['0', 'false', 'no', 'off'].includes(String(process.env.EDLINK_DEBUG_LOGS || 'true').toLowerCase());
 
 let edlinkInterval = null;
 let edlinkFetchRunning = false;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function redactSecrets(value) {
+  if (Array.isArray(value)) return value.map(redactSecrets);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+      if (/authorization|bearer|password|passwd|email|user.?token|access.?token|refresh.?token|secret|cookie|set-cookie/i.test(key)) {
+        return [key, typeof item === 'string' && /^Bearer\s/i.test(item) ? 'Bearer [REDACTED]' : '[REDACTED]'];
+      }
+      return [key, redactSecrets(item)];
+    }));
+  }
+  if (typeof value === 'string') {
+    return value
+      .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+      .replace(/([?&](?:token|access_token|refresh_token|password)=)[^&\s]+/gi, '$1[REDACTED]')
+      .replace(/("(?:token|access_token|refresh_token|password|email|secret)"\s*:\s*)"[^"]*"/gi, '$1"[REDACTED]"');
+  }
+  return value;
+}
+
+function debugEdlink(label, value) {
+  if (!EDLINK_DEBUG_LOGS) return;
+  let safeValue = redactSecrets(value);
+  if (typeof safeValue !== 'string') {
+    try { safeValue = JSON.stringify(safeValue, null, 2); } catch { safeValue = String(safeValue); }
+  }
+  console.log(`[Edlink reminders][DEBUG] ${label}\n${safeValue}`);
+}
+
+function isTransientEdlinkError(err) {
+  const errorCodes = new Set([
+    'ETIMEDOUT', 'ECONNRESET', 'ECONNREFUSED', 'EAI_AGAIN', 'ENETUNREACH',
+    'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_SOCKET',
+  ]);
+  let cause = err;
+  let retryable = err?.name === 'AbortError' || err?.name === 'TimeoutError';
+  for (let depth = 0; cause && depth < 6; depth += 1, cause = cause.cause) {
+    if (errorCodes.has(cause.code)) retryable = true;
+  }
+  return retryable;
+}
+
+// Reminders have their own retry policy; keep /tugas and /jadwal untouched.
+async function refreshSchedulerBearer(opts = {}) {
+  let lastError;
+  for (let attempt = 0; attempt < EDLINK_REFRESH_RETRIES; attempt += 1) {
+    try {
+      debugEdlink('SSO refresh dimulai', { attempt: attempt + 1, maxAttempts: EDLINK_REFRESH_RETRIES });
+      const token = await refreshBearerToken({ ...opts, debug: debugEdlink });
+      debugEdlink('SSO refresh berhasil', { tokenReceived: Boolean(token), tokenLength: token?.length });
+      return token;
+    } catch (err) {
+      lastError = err;
+      debugEdlink('SSO refresh gagal', { attempt: attempt + 1, message: err.message, stack: err.stack, cause: err.cause ? { message: err.cause.message, code: err.cause.code } : null });
+      if (attempt === EDLINK_REFRESH_RETRIES - 1) break;
+      const waitMs = 1500 * (2 ** attempt);
+      console.warn(`[Edlink reminders] SSO refresh gagal; percobaan ${attempt + 2}/${EDLINK_REFRESH_RETRIES} dalam ${waitMs / 1000}s: ${err.message}`);
+      await delay(waitMs);
+    }
+  }
+  throw lastError;
+}
 
 async function fetchEdlink(url, options) {
   for (let attempt = 0; attempt <= EDLINK_FETCH_RETRIES; attempt += 1) {
@@ -35,33 +99,39 @@ async function fetchEdlink(url, options) {
     const timeout = setTimeout(() => controller.abort(), EDLINK_FETCH_TIMEOUT_MS);
 
     try {
+      debugEdlink('HTTP REQUEST', {
+        attempt: attempt + 1,
+        maxAttempts: EDLINK_FETCH_RETRIES + 1,
+        url,
+        method: options.method || 'GET',
+        headers: options.headers,
+        body: options.body ? (() => { try { return JSON.parse(options.body); } catch { return options.body; } })() : null,
+        timeoutMs: EDLINK_FETCH_TIMEOUT_MS,
+      });
       const response = await fetch(url, { ...options, signal: controller.signal });
       // Consume the body while the timeout is still active; fetch() alone only
       // guarantees that response headers have arrived, not that the body did.
       const responseText = await response.text();
+      debugEdlink('HTTP RESPONSE', {
+        url: response.url || url,
+        status: response.status,
+        statusText: response.statusText,
+        ok: response.ok,
+        redirected: response.redirected,
+        headers: Object.fromEntries(response.headers.entries()),
+        bodyText: responseText,
+      });
       return {
         ok: response.ok,
         status: response.status,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries()),
+        bodyText: responseText,
         json: async () => responseText ? JSON.parse(responseText) : {},
       };
     } catch (err) {
-      const errorCodes = new Set([
-        'ETIMEDOUT',
-        'ECONNRESET',
-        'ECONNREFUSED',
-        'EAI_AGAIN',
-        'ENETUNREACH',
-        'UND_ERR_CONNECT_TIMEOUT',
-        'UND_ERR_HEADERS_TIMEOUT',
-        'UND_ERR_BODY_TIMEOUT',
-        'UND_ERR_SOCKET',
-      ]);
-      let cause = err;
-      let retryable = err?.name === 'AbortError';
-      for (let depth = 0; cause && depth < 5; depth += 1, cause = cause.cause) {
-        if (errorCodes.has(cause.code)) retryable = true;
-      }
-      if (!retryable || attempt === EDLINK_FETCH_RETRIES) throw err;
+      debugEdlink('HTTP NETWORK ERROR', { url, attempt: attempt + 1, name: err.name, message: err.message, code: err.code || err.cause?.code, cause: err.cause ? { name: err.cause.name, message: err.cause.message, code: err.cause.code } : null, stack: err.stack });
+      if (!isTransientEdlinkError(err) || attempt === EDLINK_FETCH_RETRIES) throw err;
       const waitMs = 1000 * (2 ** attempt);
       console.warn(`[Edlink] Request gagal (${err?.cause?.code || err?.code || err?.name || 'network error'}), percobaan ${attempt + 1}/${EDLINK_FETCH_RETRIES}; mencoba lagi dalam ${waitMs / 1000}s.`);
       await delay(waitMs);
@@ -69,6 +139,45 @@ async function fetchEdlink(url, options) {
       clearTimeout(timeout);
     }
   }
+}
+
+async function fetchReminderAssignments(bearer) {
+  const res = await fetchEdlink(EDLINK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${bearer}`,
+      accept: 'application/json, text/plain, */*',
+      'x-app-locale': 'id',
+      'x-referer': 'https://edlink.id/panel/',
+      'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+      'cache-control': 'no-cache',
+      pragma: 'no-cache',
+      priority: 'u=1, i',
+      origin: 'https://edlink.id',
+      referer: 'https://edlink.id/',
+    },
+    body: JSON.stringify({
+      dataProvider: JSON.stringify({
+        criterion: [],
+        page: { count: 0, current: 1, limit: 5, next: 0, previous: 0, total: 0 },
+        sort: [],
+      }),
+      accept_assessment_team: true,
+    }),
+  });
+  const payload = await res.json().catch(() => ({}));
+  debugEdlink('PARSED API OUTPUT', {
+    status: res.status,
+    statusText: res.statusText,
+    responseHeaders: res.headers,
+    applicationMessage: payload?.applicationSystem?.message ?? null,
+    dataIsNull: payload?.data == null,
+    responseKeys: Object.keys(payload || {}),
+    itemCount: Array.isArray(payload?.data?.data) ? payload.data.data.length : null,
+    payload,
+  });
+  return { res, payload };
 }
 
 async function ensureTable() {
@@ -121,67 +230,75 @@ async function startEdlinkScheduler(sock, opts = {}) {
     edlinkFetchRunning = true;
 
     try {
-      const res = await fetchEdlink(EDLINK_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${bearer}`,
-          'accept': 'application/json, text/plain, */*',
-          'x-app-locale': 'id',
-          'x-referer': 'https://edlink.id/panel/',
-          'accept-language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-          'cache-control': 'no-cache',
-          pragma: 'no-cache',
-          priority: 'u=1, i',
-          origin: 'https://edlink.id',
-          referer: 'https://edlink.id/',
-        },
-        body: JSON.stringify({
-          dataProvider: JSON.stringify({
-            criterion: [],
-            page: { count: 0, current: 1, limit: 5, next: 0, previous: 0, total: 0 },
-            sort: [],
-          }),
-          accept_assessment_team: true,
-        }),
-      });
-      const payload = await res.json().catch(() => ({}));
-      const sessionExpired = [401, 403].includes(res.status)
+      let { res, payload } = await fetchReminderAssignments(bearer);
+      let sessionExpired = [401, 403].includes(res.status)
         || payload?.data == null
         || payload?.applicationSystem?.message === 'Silakan refresh halaman Anda atau login kembali';
       if (sessionExpired) {
-        bearer = await refreshBearerToken(opts);
-        return;
+        console.warn('[Edlink reminders] API menolak sesi; detail request/response dan alasan klasifikasi ada pada log DEBUG di atas.');
+        debugEdlink('SESSION REJECTED - DIAGNOSIS', {
+          httpStatus: res.status,
+          applicationMessage: payload?.applicationSystem?.message ?? null,
+          dataIsNull: payload?.data == null,
+          responseKeys: Object.keys(payload || {}),
+          reason: [401, 403].includes(res.status) ? 'HTTP 401/403' : payload?.data == null ? 'payload.data null/undefined' : 'applicationSystem meminta login ulang',
+        });
+        bearer = await refreshSchedulerBearer(opts);
+        // Validate the newly saved token immediately, in this same cycle.
+        ({ res, payload } = await fetchReminderAssignments(bearer));
+        sessionExpired = [401, 403].includes(res.status)
+          || payload?.data == null
+          || payload?.applicationSystem?.message === 'Silakan refresh halaman Anda atau login kembali';
+        if (sessionExpired) {
+          console.error('[Edlink reminders] Token hasil login ulang masih ditolak API; lihat log DEBUG untuk request/response sebelum dan sesudah refresh.');
+          return;
+        }
       }
       if (!res.ok) {
-        console.error('Edlink fetch failed', res.status, JSON.stringify(payload));
+        console.error('[Edlink reminders] API gagal:', res.status, res.statusText, res.bodyText);
         return;
       }
       const items = payload?.data?.data ?? [];
       const now = dayjs().tz(TZ);
       const nowHHMM = now.format('HH:mm');
+      debugEdlink('REMINDER PROCESSING INPUT', { now: now.format(), timezone: TZ, nowHHMM, offsets, itemCount: items.length, items });
 
       for (const it of items) {
         // determine due date/time (dayjs in TZ)
-        const due = parseDueAt(it.dueAt || it.publishedAtTimestamp || it.section?.endedAtTimestamp);
-        if (!due) continue; // skip items without due time
+        const rawDueAt = it.dueAt || it.publishedAtTimestamp || it.section?.endedAtTimestamp;
+        // Many Edlink items have no deadline at all. Ignore them quietly; only
+        // log a parse warning when a deadline value exists but is malformed.
+        if (rawDueAt == null || rawDueAt === '') continue;
+
+        const due = parseDueAt(rawDueAt);
+        if (!due || !due.isValid()) {
+          debugEdlink('ITEM SKIPPED - due time tidak bisa diparse', { id: it?.id, title: it?.title, dueAt: it?.dueAt, publishedAtTimestamp: it?.publishedAtTimestamp, sectionEndedAtTimestamp: it?.section?.endedAtTimestamp });
+          continue;
+        }
 
         for (const off of offsets) {
           const notifyTime = due.subtract(off, 'minute');
           const notifyHHMM = notifyTime.format('HH:mm');
-          if (notifyHHMM !== nowHHMM) continue;
+          if (notifyHHMM !== nowHHMM) {
+            debugEdlink('REMINDER OFFSET CHECK', { id: it.id, title: it.title, dueAt: due.format(), offsetMinutes: off, calculatedNotifyTime: notifyTime.format(), nowHHMM, notifyHHMM, matches: false });
+            continue;
+          }
 
           const today = notifyTime.format('YYYY-MM-DD');
 
           // already sent?
           const exists = await db('edlink_notifications').where({ external_id: String(it.id), notify_date: notifyTime.format('YYYY-MM-DD'), offset_min: off }).first();
-          if (exists) continue;
+          if (exists) {
+            debugEdlink('REMINDER SKIPPED - sudah pernah dikirim', { externalId: String(it.id), notifyDate: notifyTime.format('YYYY-MM-DD'), offsetMinutes: off, existingRow: exists });
+            continue;
+          }
 
           // build message
           const title = it.title || (it.group?.name ?? 'Tugas/Quiz');
           const groupName = it.group?.className || it.group?.name || '';
           const link = (it.group?.description && (it.group.description.match(/https?:\/\/[^\"]+/) || [])[0]) || '';
           const text = `🔔 *EDLINK Reminder*\n${title}\nKelas: ${groupName}\nWaktu: ${due.format('LLLL')}\n(${off} menit lagi)\n${link}`;
+          debugEdlink('REMINDER OUTPUT', { notifyJid, externalId: String(it.id), offsetMinutes: off, dueAt: due.format(), message: text });
 
           try {
             await sock.sendMessage(notifyJid, { text });
@@ -193,7 +310,12 @@ async function startEdlinkScheduler(sock, opts = {}) {
         }
       }
     } catch (err) {
-      console.error('Edlink scheduler error:', err.message, err.cause?.code ? `(${err.cause.code})` : '');
+      const code = err?.cause?.code || err?.code;
+      if (isTransientEdlinkError(err)) {
+        console.error(`[Edlink reminders] Network gagal setelah retry: ${err.message}${code ? ` (${code})` : ''}. Akan dicoba lagi pada polling berikutnya.`);
+      } else {
+        console.error('[Edlink reminders] Scheduler error:', err.message, code ? `(${code})` : '');
+      }
     } finally {
       edlinkFetchRunning = false;
     }
