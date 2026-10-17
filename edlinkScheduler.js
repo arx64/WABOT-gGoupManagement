@@ -24,7 +24,8 @@ const EDLINK_URL = 'https://api.edlink.id/api/v1.4/home/openassignmentsandquizes
 const EDLINK_FETCH_TIMEOUT_MS = Number(process.env.EDLINK_FETCH_TIMEOUT_MS || 60000);
 const EDLINK_FETCH_RETRIES = Number(process.env.EDLINK_FETCH_RETRIES || 4);
 const EDLINK_REFRESH_RETRIES = Number(process.env.EDLINK_REFRESH_RETRIES || 3);
-const EDLINK_DEBUG_LOGS = !['0', 'false', 'no', 'off'].includes(String(process.env.EDLINK_DEBUG_LOGS || 'true').toLowerCase());
+// Diagnostic request/response logging is opt-in; keep it off during normal operation.
+const EDLINK_DEBUG_LOGS = ['1', 'true', 'yes', 'on'].includes(String(process.env.EDLINK_DEBUG_LOGS || 'false').toLowerCase());
 
 let edlinkInterval = null;
 let edlinkFetchRunning = false;
