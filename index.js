@@ -38,6 +38,7 @@ import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from
 import { scheduleDeletedNotificationExpiry, startDeletedNotificationExpiry } from './utils/deletedNotificationExpiry.js';
 import { extractViewOnceContent } from './utils/viewOnce.js';
 import { handleUktCommand } from './uktManager.js';
+import { startUktReminderScheduler, stopUktReminderScheduler } from './uktReminder.js';
 
 let sock;
 let qrDataURL = null;
@@ -799,6 +800,7 @@ async function connectToWhatsApp() {
         // start edlink scheduler if configured (EDLINK_BEARER and EDLINK_NOTIFY_JID)
         startEdlinkScheduler(sock).catch((err) => console.error('startEdlinkScheduler failed:', err));
         startSendScheduler(sock).catch((err) => console.error('startSendScheduler failed:', err));
+        startUktReminderScheduler(sock);
       } catch (e) {
         console.error('Failed to start scheduler:', e);
       }
@@ -829,6 +831,11 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         }
         try {
           stopSendScheduler();
+        } catch (e) {
+          /* ignore */
+        }
+        try {
+          stopUktReminderScheduler();
         } catch (e) {
           /* ignore */
         }
