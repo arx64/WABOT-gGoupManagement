@@ -287,6 +287,11 @@ function getDeletedMessageMedia(message) {
   for (let depth = 0; content && depth < 6; depth += 1) {
     if (content.imageMessage) return { type: 'image', message: content.imageMessage };
     if (content.videoMessage) return { type: 'video', message: content.videoMessage };
+    if (content.audioMessage) return { type: 'audio', message: content.audioMessage };
+    if (content.documentMessage) return { type: 'document', message: content.documentMessage };
+    if (content.stickerMessage) return { type: 'sticker', message: content.stickerMessage };
+    if (content.ptvMessage) return { type: 'video', message: content.ptvMessage };
+    if (content.documentWithCaptionMessage?.message) content = content.documentWithCaptionMessage.message;
     if (content.ephemeralMessage?.message) content = content.ephemeralMessage.message;
     else if (content.viewOnceMessage?.message) content = content.viewOnceMessage.message;
     else if (content.viewOnceMessageV2?.message) content = content.viewOnceMessageV2.message;
@@ -3024,30 +3029,37 @@ ${soal.soal}`,
                 });
                 await scheduleDeletedNotificationExpiry(ownerJid, sentNotification?.key);
 
-                // Untuk private chat, ikutkan foto/video asli jika tersedia.
-                // Media dikirim sebagai pesan terpisah supaya masing-masing bisa dihapus setelah 24 jam.
-                if (!isGroup) {
-                  const media = getDeletedMessageMedia(cachedData.message);
-                  if (media) {
-                    try {
-                      const buffer = await downloadMediaMessage(
-                        cachedData.message,
-                        'buffer',
-                        {},
-                        { reuploadRequest: sock.updateMediaMessage },
-                      );
-                      const mediaPayload = media.type === 'image'
-                        ? { image: buffer, ...(media.message.caption ? { caption: media.message.caption } : {}) }
-                        : { video: buffer, ...(media.message.caption ? { caption: media.message.caption } : {}), mimetype: media.message.mimetype || 'video/mp4' };
-                      const sentMedia = await sock.sendMessage(ownerJid, mediaPayload);
-                      await scheduleDeletedNotificationExpiry(ownerJid, sentMedia?.key);
-                    } catch (mediaError) {
-                      console.warn('[deleted-message] Media foto/video tidak dapat diteruskan ke owner:', mediaError.message);
-                      const sentWarning = await sock.sendMessage(ownerJid, {
-                        text: `⚠️ Foto/video dari pesan yang dihapus tidak berhasil dilampirkan. Detail: ${mediaError.message}`,
-                      });
-                      await scheduleDeletedNotificationExpiry(ownerJid, sentWarning?.key);
+                // Sertakan media untuk pesan yang dihapus dari grup, private chat, maupun status.
+                // Media dikirim sebagai pesan terpisah supaya ikut terhapus otomatis setelah 24 jam.
+                const media = getDeletedMessageMedia(cachedData.message);
+                if (media) {
+                  try {
+                    const buffer = await downloadMediaMessage(
+                      cachedData.message,
+                      'buffer',
+                      {},
+                      { reuploadRequest: sock.updateMediaMessage },
+                    );
+                    let mediaPayload;
+                    if (media.type === 'image') {
+                      mediaPayload = { image: buffer, ...(media.message.caption ? { caption: media.message.caption } : {}) };
+                    } else if (media.type === 'video') {
+                      mediaPayload = { video: buffer, ...(media.message.caption ? { caption: media.message.caption } : {}), mimetype: media.message.mimetype || 'video/mp4' };
+                    } else if (media.type === 'audio') {
+                      mediaPayload = { audio: buffer, mimetype: media.message.mimetype || 'audio/ogg; codecs=opus', ptt: Boolean(media.message.ptt) };
+                    } else if (media.type === 'document') {
+                      mediaPayload = { document: buffer, fileName: media.message.fileName || media.message.filename || 'file', mimetype: media.message.mimetype || 'application/octet-stream', ...(media.message.caption ? { caption: media.message.caption } : {}) };
+                    } else {
+                      mediaPayload = { sticker: buffer };
                     }
+                    const sentMedia = await sock.sendMessage(ownerJid, mediaPayload);
+                    await scheduleDeletedNotificationExpiry(ownerJid, sentMedia?.key);
+                  } catch (mediaError) {
+                    console.warn('[deleted-message] Media pesan yang dihapus tidak dapat diteruskan ke owner:', mediaError.message);
+                    const sentWarning = await sock.sendMessage(ownerJid, {
+                      text: `⚠️ Media dari pesan yang dihapus tidak berhasil dilampirkan. Detail: ${mediaError.message}`,
+                    });
+                    await scheduleDeletedNotificationExpiry(ownerJid, sentWarning?.key);
                   }
                 }
                 
