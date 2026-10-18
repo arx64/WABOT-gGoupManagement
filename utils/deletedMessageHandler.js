@@ -25,11 +25,22 @@ export function cacheMessage(chatJid, messageId, msg) {
     const chatMessages = messageCache.get(chatJid);
     
     // Simpan data pesan dengan timestamp
+    const key = msg.key || {};
+    const senderCandidates = [
+      key.participantAlt,
+      key.participant,
+      key.remoteJidAlt,
+      key.remoteJid,
+    ].filter(Boolean);
+    const phoneJid = senderCandidates.find((jid) => jid.endsWith('@s.whatsapp.net'));
+    const rawPushName = typeof msg.pushName === 'string' ? msg.pushName.trim() : '';
+
     chatMessages.set(messageId, {
       message: msg,
       timestamp: Date.now(),
-      senderJid: msg.key.participant || msg.key.remoteJid,
-      pushName: msg.pushName || 'Unknown'
+      senderJid: phoneJid || senderCandidates[0] || '',
+      phoneNumber: phoneJid ? phoneJid.split('@')[0] : '',
+      pushName: rawPushName && !/^[.\s]+$/.test(rawPushName) ? rawPushName : 'Pengguna'
     });
 
     // Batasi cache size per chat
@@ -84,8 +95,8 @@ export function formatDeletedMessage(cachedMsgData) {
   if (!cachedMsgData) return '';
 
   const msg = cachedMsgData.message;
-  const senderName = cachedMsgData.pushName || 'Unknown';
-  const senderJid = cachedMsgData.senderJid.split('@')[0];
+  const senderName = cachedMsgData.pushName || 'Pengguna';
+  const senderJid = cachedMsgData.phoneNumber || (cachedMsgData.senderJid || '').split('@')[0];
 
   let content = '';
   
@@ -127,8 +138,8 @@ export function formatDeletedMessage(cachedMsgData) {
 export function createDeletedMessageNotification(cachedMsgData, chatJid) {
   if (!cachedMsgData) return '';
 
-  const senderName = cachedMsgData.pushName || 'Unknown';
-  const senderJid = cachedMsgData.senderJid;
+  const senderName = cachedMsgData.pushName || 'Pengguna';
+  const senderJid = cachedMsgData.phoneNumber || '';
   const isGroup = chatJid.endsWith('@g.us');
   
   const content = formatDeletedMessage(cachedMsgData);
@@ -139,7 +150,7 @@ export function createDeletedMessageNotification(cachedMsgData, chatJid) {
   if (isGroup) {
     // Tampilkan nama dan nomor pengguna tanpa mention/tag.
     notification = `🗑️ *Pesan Dihapus*\n\n`;
-    notification += `👤 Pengguna: ${senderName} (${senderJid.split('@')[0]})\n`;
+    notification += `👤 Pengguna: ${senderName}${senderJid ? ` (${senderJid})` : ''}\n`;
     notification += `💬 Isi: ${content}`;
   } else {
     // Untuk personal chat
