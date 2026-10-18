@@ -40,7 +40,9 @@ export function cacheMessage(chatJid, messageId, msg) {
       timestamp: Date.now(),
       senderJid: phoneJid || senderCandidates[0] || '',
       phoneNumber: phoneJid ? phoneJid.split('@')[0] : '',
-      pushName: rawPushName && !/^[.\s]+$/.test(rawPushName) ? rawPushName : 'Pengguna'
+      // Pertahankan nama WhatsApp persis seperti yang diberikan, termasuk
+      // nama berupa titik. Jangan menggantinya dengan label buatan "Pengguna".
+      pushName: rawPushName
     });
 
     // Batasi cache size per chat
@@ -95,7 +97,7 @@ export function formatDeletedMessage(cachedMsgData) {
   if (!cachedMsgData) return '';
 
   const msg = cachedMsgData.message;
-  const senderName = cachedMsgData.pushName || 'Pengguna';
+  const senderName = cachedMsgData.pushName || cachedMsgData.phoneNumber || (cachedMsgData.senderJid || '').split('@')[0] || 'Unknown';
   const senderJid = cachedMsgData.phoneNumber || (cachedMsgData.senderJid || '').split('@')[0];
 
   let content = '';
@@ -138,7 +140,7 @@ export function formatDeletedMessage(cachedMsgData) {
 export function createDeletedMessageNotification(cachedMsgData, chatJid) {
   if (!cachedMsgData) return '';
 
-  const senderName = cachedMsgData.pushName || 'Pengguna';
+  const senderName = cachedMsgData.pushName || cachedMsgData.phoneNumber || (cachedMsgData.senderJid || '').split('@')[0] || 'Unknown';
   const senderJid = cachedMsgData.phoneNumber || '';
   const isGroup = chatJid.endsWith('@g.us');
   

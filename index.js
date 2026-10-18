@@ -3024,17 +3024,6 @@ ${soal.soal}`,
                     const groupMetadata = await sock.groupMetadata(remoteJid);
                     if (groupMetadata?.subject) groupName = groupMetadata.subject;
 
-                    // Jika pushName pesan hanya berupa titik/kosong, coba nama
-                    // peserta dari metadata grup sebelum membuat notifikasi.
-                    if (!cachedData.pushName || /^[.\s]+$/.test(cachedData.pushName)) {
-                      const cachedKey = cachedData.message?.key || {};
-                      const senderIds = [cachedKey.participantAlt, cachedKey.participant, cachedData.senderJid].filter(Boolean);
-                      const participant = groupMetadata?.participants?.find((item) =>
-                        senderIds.includes(item.id) || senderIds.includes(item.phoneNumber ? `${item.phoneNumber}@s.whatsapp.net` : '')
-                      );
-                      const participantName = participant?.name || participant?.notify || participant?.verifiedName;
-                      if (participantName && !/^[.\s]+$/.test(participantName)) cachedData.pushName = participantName;
-                    }
                   } catch (metadataError) {
                     console.warn('Gagal mengambil nama grup untuk notifikasi pesan dihapus:', metadataError.message);
                   }
