@@ -3016,8 +3016,6 @@ ${soal.soal}`,
                 const ownerJid = OWNER_NUMBER.endsWith('@s.whatsapp.net')
                   ? OWNER_NUMBER
                   : `${OWNER_NUMBER}@s.whatsapp.net`;
-                const notification = createDeletedMessageNotification(cachedData, remoteJid);
-                
                 const isGroup = remoteJid.endsWith('@g.us');
                 let chatSource;
                 if (isGroup) {
@@ -3025,6 +3023,18 @@ ${soal.soal}`,
                   try {
                     const groupMetadata = await sock.groupMetadata(remoteJid);
                     if (groupMetadata?.subject) groupName = groupMetadata.subject;
+
+                    // Jika pushName pesan hanya berupa titik/kosong, coba nama
+                    // peserta dari metadata grup sebelum membuat notifikasi.
+                    if (!cachedData.pushName || /^[.\s]+$/.test(cachedData.pushName)) {
+                      const cachedKey = cachedData.message?.key || {};
+                      const senderIds = [cachedKey.participantAlt, cachedKey.participant, cachedData.senderJid].filter(Boolean);
+                      const participant = groupMetadata?.participants?.find((item) =>
+                        senderIds.includes(item.id) || senderIds.includes(item.phoneNumber ? `${item.phoneNumber}@s.whatsapp.net` : '')
+                      );
+                      const participantName = participant?.name || participant?.notify || participant?.verifiedName;
+                      if (participantName && !/^[.\s]+$/.test(participantName)) cachedData.pushName = participantName;
+                    }
                   } catch (metadataError) {
                     console.warn('Gagal mengambil nama grup untuk notifikasi pesan dihapus:', metadataError.message);
                   }
@@ -3032,6 +3042,8 @@ ${soal.soal}`,
                 } else {
                   chatSource = `📍 *Lokasi:* Private Chat (${remoteJid.split('@')[0]})`;
                 }
+
+                const notification = createDeletedMessageNotification(cachedData, remoteJid);
                 
                 // Kirim ke owner
                 const sentNotification = await sock.sendMessage(ownerJid, {
