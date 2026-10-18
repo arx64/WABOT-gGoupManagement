@@ -137,9 +137,9 @@ export function createDeletedMessageNotification(cachedMsgData, chatJid) {
   let notification = '';
   
   if (isGroup) {
-    // Untuk group, mention si pengguna
+    // Tampilkan nama dan nomor pengguna tanpa mention/tag.
     notification = `🗑️ *Pesan Dihapus*\n\n`;
-    notification += `👤 Pengguna: @${senderJid.split('@')[0]}\n`;
+    notification += `👤 Pengguna: ${senderName} (${senderJid.split('@')[0]})\n`;
     notification += `💬 Isi: ${content}`;
   } else {
     // Untuk personal chat

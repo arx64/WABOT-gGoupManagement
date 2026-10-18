@@ -3019,9 +3019,19 @@ ${soal.soal}`,
                 const notification = createDeletedMessageNotification(cachedData, remoteJid);
                 
                 const isGroup = remoteJid.endsWith('@g.us');
-                const chatSource = isGroup
-                  ? `📍 *Lokasi:* Group (${remoteJid.split('@')[0]})`
-                  : `📍 *Lokasi:* Private Chat (${remoteJid.split('@')[0]})`;
+                let chatSource;
+                if (isGroup) {
+                  let groupName = remoteJid.split('@')[0];
+                  try {
+                    const groupMetadata = await sock.groupMetadata(remoteJid);
+                    if (groupMetadata?.subject) groupName = groupMetadata.subject;
+                  } catch (metadataError) {
+                    console.warn('Gagal mengambil nama grup untuk notifikasi pesan dihapus:', metadataError.message);
+                  }
+                  chatSource = `📍 *Lokasi:* Group (${groupName})`;
+                } else {
+                  chatSource = `📍 *Lokasi:* Private Chat (${remoteJid.split('@')[0]})`;
+                }
                 
                 // Kirim ke owner
                 const sentNotification = await sock.sendMessage(ownerJid, {
