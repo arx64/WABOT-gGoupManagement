@@ -7,6 +7,35 @@
 
 import 'dotenv/config';
 import { google } from 'googleapis';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+
+const ENV_PATH = path.resolve(process.cwd(), '.env');
+let oauthClient;
+let driveClient;
+let refreshPromise;
+
+function updateEnvValue(contents, key, value) {
+  const pattern = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (pattern.test(contents)) return contents.replace(pattern, line);
+  return `${contents}${contents && !contents.endsWith('\n') ? '\n' : ''}${line}\n`;
+}
+
+async function persistRefreshToken(token) {
+  // A rotated refresh token is rare, but if Google issues one keep it across restarts.
+  let contents = '';
+  try {
+    contents = await readFile(ENV_PATH, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  await writeFile(ENV_PATH, updateEnvValue(contents, 'GOOGLE_REFRESH_TOKEN', token), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  process.env.GOOGLE_REFRESH_TOKEN = token;
+}
 
 // Validate required environment variables
 function validateEnv() {
@@ -35,29 +64,46 @@ function validateEnv() {
  */
 export function getOAuthClient() {
   validateEnv();
-  
-  const oauth2Client = new google.auth.OAuth2(
+  if (oauthClient) return oauthClient;
+
+  oauthClient = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    process.env.GOOGLE_REDIRECT_URI,
   );
 
   // Set credentials with refresh token
-  oauth2Client.setCredentials({
+  oauthClient.setCredentials({
     refresh_token: process.env.GOOGLE_REFRESH_TOKEN
   });
 
   // Listen for token refresh events
-  oauth2Client.on('tokens', (tokens) => {
+  oauthClient.on('tokens', (tokens) => {
     if (tokens.access_token) {
       console.log('[DriveClient] Access token refreshed automatically');
     }
-    // Google normally reuses the original refresh token. If a new one is ever
-    // issued, don't log it; the running process can continue with the client
-    // credentials already updated by google-auth-library.
+    if (tokens.refresh_token) {
+      void persistRefreshToken(tokens.refresh_token).catch((error) => {
+        console.error('[DriveClient] Gagal menyimpan refresh token baru ke .env:', error.message);
+      });
+    }
   });
 
-  return oauth2Client;
+  return oauthClient;
+}
+
+/** Proactively refresh the short-lived access token; concurrent calls share one refresh. */
+export async function refreshGoogleAccessToken() {
+  const auth = getOAuthClient();
+  if (!refreshPromise) {
+    refreshPromise = auth.getAccessToken()
+      .then(({ token }) => {
+        if (!token) throw new Error('Google OAuth tidak mengembalikan access token.');
+        return token;
+      })
+      .finally(() => { refreshPromise = null; });
+  }
+  return refreshPromise;
 }
 
 /**
@@ -65,8 +111,8 @@ export function getOAuthClient() {
  * @returns {drive_v3.Drive} Drive API client
  */
 export function getDriveClient() {
-  const auth = getOAuthClient();
-  return google.drive({ version: 'v3', auth });
+  if (!driveClient) driveClient = google.drive({ version: 'v3', auth: getOAuthClient() });
+  return driveClient;
 }
 
 /**
@@ -76,6 +122,7 @@ export function getDriveClient() {
 export async function testConnection() {
   try {
     const drive = getDriveClient();
+    await refreshGoogleAccessToken();
     const about = await drive.about.get({
       fields: 'user,storageQuota'
     });
@@ -109,5 +156,6 @@ export function formatDriveAuthError(error) {
 export default {
   getOAuthClient,
   getDriveClient,
+  refreshGoogleAccessToken,
   testConnection
 };
