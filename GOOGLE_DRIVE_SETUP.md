@@ -86,11 +86,15 @@ Pastikan semua variabel di `.env` sudah terisi:
 
 ### Error: "invalid_grant"
 
-Refresh token sudah expired atau dicabut. Solusi:
-1. Buka https://myaccount.google.com/permissions
-2. Cari aplikasi bot Anda → Klik "Remove access"
-3. Jalankan ulang `node auth/generateToken.js`
-4. Update `GOOGLE_REFRESH_TOKEN` di `.env`
+`invalid_grant` saat refresh berarti Google menolak refresh token (misalnya token kedaluwarsa/dicabut, dibuat untuk OAuth Client ID yang berbeda, atau ada masalah kebijakan OAuth). Auto-refresh pada `googleapis` hanya dapat memperbarui access token selama refresh token masih valid; refresh token yang ditolak tidak dapat diperbaiki otomatis.
+
+Langkah pemulihan:
+1. Pastikan `GOOGLE_CLIENT_ID` dan `GOOGLE_CLIENT_SECRET` di `.env` adalah pasangan OAuth client yang sama dengan yang dipakai ketika token dibuat.
+2. Jalankan `node auth/generateToken.js` dari direktori proyek dan selesaikan otorisasi Google dengan akun pemilik Drive yang benar.
+3. Ganti nilai `GOOGLE_REFRESH_TOKEN` di `.env` dengan token baru yang ditampilkan oleh generator. Jangan kirim atau commit token tersebut ke siapa pun.
+4. Restart bot dan uji upload/fitur `/ukt`.
+
+Jika generator tidak menampilkan refresh token baru, cabut akses aplikasi di https://myaccount.google.com/permissions lalu jalankan generator lagi dengan persetujuan baru (`prompt: 'consent'` sudah diatur di script).
 
 ### Error: "insufficient permissions"
 
@@ -98,7 +102,7 @@ Saat generate token, pastikan Anda mencentang izin untuk Google Drive.
 
 ### Token Expired
 
-Access token akan otomatis di-refresh menggunakan refresh token. Tidak perlu tindakan manual.
+Access token akan otomatis di-refresh menggunakan refresh token selama refresh token tetap valid. Jika log menunjukkan `invalid_grant`, lakukan langkah pemulihan di atas.
 
 ## Fitur
 

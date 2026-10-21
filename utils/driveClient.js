@@ -52,6 +52,9 @@ export function getOAuthClient() {
     if (tokens.access_token) {
       console.log('[DriveClient] Access token refreshed automatically');
     }
+    // Google normally reuses the original refresh token. If a new one is ever
+    // issued, don't log it; the running process can continue with the client
+    // credentials already updated by google-auth-library.
   });
 
   return oauth2Client;
@@ -83,8 +86,24 @@ export async function testConnection() {
       connected: true
     };
   } catch (error) {
-    throw new Error(`Failed to connect to Google Drive: ${error.message}`);
+    throw new Error(formatDriveAuthError(error));
   }
+}
+
+/** Return an actionable message for OAuth failures without exposing secrets. */
+export function formatDriveAuthError(error) {
+  const responseData = error?.response?.data || {};
+  const code = String(responseData.error || error?.code || '');
+  const description = String(responseData.error_description || error?.message || '');
+  const message = `${code} ${description} ${error?.message || ''}`.toLowerCase();
+
+  if (message.includes('invalid_grant')) {
+    return 'Google Drive OAuth gagal: refresh token sudah kedaluwarsa/dicabut atau tidak cocok dengan OAuth Client ID. Auto-refresh hanya memperbarui access token; token ini tidak bisa dipulihkan otomatis. Buat refresh token baru dengan `node auth/generateToken.js`, simpan sebagai GOOGLE_REFRESH_TOKEN di .env, lalu restart bot.';
+  }
+  if (message.includes('invalid_client')) {
+    return 'Google Drive OAuth gagal: GOOGLE_CLIENT_ID atau GOOGLE_CLIENT_SECRET tidak valid/tidak sepasang. Periksa kredensial OAuth di .env.';
+  }
+  return `Gagal terhubung ke Google Drive: ${error?.message || description || 'kesalahan tidak diketahui'}`;
 }
 
 export default {

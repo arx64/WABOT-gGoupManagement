@@ -37,6 +37,7 @@ import {
 import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
 import { scheduleDeletedNotificationExpiry, startDeletedNotificationExpiry } from './utils/deletedNotificationExpiry.js';
 import { extractViewOnceContent } from './utils/viewOnce.js';
+import { uploadSeeMediaToDrive, SEE_DRIVE_FOLDER_NAME } from './utils/seeDrive.js';
 import { handleUktCommand } from './uktManager.js';
 import { startUktReminderScheduler, stopUktReminderScheduler } from './uktReminder.js';
 
@@ -253,7 +254,7 @@ async function downloadViewOnceMedia(sock, sourceMessage, viewOnce) {
   }
 }
 
-async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage) {
+async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage, { uploadToDrive = false } = {}) {
   const viewOnce = extractViewOnceContent(sourceMessage);
   if (!viewOnce) {
     throw new Error('Pesan bukan media view-once.');
@@ -263,8 +264,19 @@ async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage)
   const buffer = await downloadViewOnceMedia(sock, sourceMessage, viewOnce);
   payload[outputType] = buffer;
 
+  let driveFile = null;
+  let driveError = null;
+  if (uploadToDrive) {
+    try {
+      driveFile = await uploadSeeMediaToDrive(buffer, viewOnce.mediaMessage);
+    } catch (error) {
+      driveError = error;
+      console.error('[see] Upload Google Drive gagal:', error.message);
+    }
+  }
+
   await sock.sendMessage(remoteJid, payload, quotedMessage ? { quoted: quotedMessage } : undefined);
-  return true;
+  return { sent: true, driveFile, driveError };
 }
 
 function getSeeOutputJid(remoteJid) {
@@ -1226,14 +1238,14 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         try {
           const outputJid = getSeeOutputJid(remoteJid);
           const outputIsOriginalChat = outputJid === remoteJid;
-          await sendViewOnceAsFile(sock, outputJid, targetMessage, outputIsOriginalChat ? msg : undefined);
-          if (outputIsOriginalChat) {
-            await sock.sendMessage(
-              remoteJid,
-              { text: 'File telah dikirim sebagai file biasa (tidak sekali dilihat lagi).' },
-              { quoted: msg },
-            );
-          }
+          const result = await sendViewOnceAsFile(
+            sock, outputJid, targetMessage, outputIsOriginalChat ? msg : undefined,
+            { uploadToDrive: true },
+          );
+          const confirmation = result.driveFile
+            ? `File telah dikirim sebagai file biasa dan berhasil diunggah ke Google Drive.\n\n📁 Folder: ${SEE_DRIVE_FOLDER_NAME}\n📄 File: ${result.driveFile.name}\n🔗 ${result.driveFile.webViewLink}`
+            : `File telah dikirim sebagai file biasa, tetapi upload Google Drive gagal.\n📁 Folder tujuan: ${SEE_DRIVE_FOLDER_NAME}\n⚠️ ${result.driveError?.message || 'Kesalahan tidak diketahui'}`;
+          await sock.sendMessage(remoteJid, { text: confirmation }, { quoted: msg });
         } catch (error) {
           console.error('Error downloading/sending view-once media:', error);
           await sock.sendMessage(
