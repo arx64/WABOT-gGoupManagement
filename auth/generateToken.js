@@ -119,7 +119,7 @@ function waitForAuthorizationCode(oauth2Client, redirect) {
       }
 
       response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      response.end('<!doctype html><html lang="id"><meta charset="utf-8"><title>Google Drive terhubung</title><body style="font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem"><h2>Otorisasi Google berhasil</h2><p>Kamu bisa menutup tab ini dan kembali ke terminal bot.</p></body></html>');
+      response.end(`<!doctype html><html lang="id"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Google Drive terhubung</title><body style="font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem"><h2>Otorisasi Google berhasil</h2><p>Token sedang disimpan. Tab ini akan mencoba menutup otomatis…</p><script>setTimeout(()=>{window.close();document.body.innerHTML='<h2>Selesai</h2><p>Otorisasi Google selesai. Kamu bisa menutup tab ini dan kembali ke terminal bot.</p>';},700);</script></body></html>`);
       finish(null, code);
     });
 
