@@ -1,136 +1,186 @@
 /**
- * Google OAuth2 Token Generator
- * 
- * Script ini digunakan SEKALI untuk mendapatkan refresh token.
- * Jalankan: node auth/generateToken.js
- * 
- * Prerequisites:
- * 1. Buat project di Google Cloud Console
- * 2. Enable Google Drive API
- * 3. Buat OAuth2 credentials (Desktop App type)
- * 4. Copy Client ID dan Client Secret ke .env
+ * Google Drive OAuth2 token setup.
+ * Run `node auth/generateToken.js`, authorize in the browser, and the callback
+ * on the configured localhost redirect automatically updates GOOGLE_REFRESH_TOKEN
+ * in .env. Credentials and tokens are never printed to the terminal.
  */
 
 import 'dotenv/config';
 import { google } from 'googleapis';
-import readline from 'readline';
+import { createServer } from 'node:http';
+import { readFile, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const ENV_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.env');
+const REDIRECT_URI = (process.env.GOOGLE_REDIRECT_URI || 'http://localhost').trim();
+const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+const execAsync = promisify(exec);
 
 function validateEnv() {
-  const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_REDIRECT_URI'];
-  const missing = required.filter(key => !process.env[key]);
-  
-  if (missing.length > 0) {
-    console.error('❌ Missing environment variables:');
-    missing.forEach(key => console.error(`   - ${key}`));
-    console.error('\nPlease add these to your .env file:\n');
-    console.error(`GOOGLE_CLIENT_ID=your_client_id_here
-GOOGLE_CLIENT_SECRET=your_client_secret_here
-GOOGLE_REDIRECT_URI=http://localhost
-GOOGLE_DRIVE_FOLDER_ID=optional_folder_id
-DRIVE_PUBLIC=0`);
-    process.exit(1);
+  const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET'];
+  const missing = required.filter((key) => !process.env[key]?.trim());
+  if (missing.length) {
+    throw new Error(`Variabel .env belum diisi: ${missing.join(', ')}`);
   }
+
+  let redirect;
+  try {
+    redirect = new URL(REDIRECT_URI);
+  } catch {
+    throw new Error('GOOGLE_REDIRECT_URI tidak valid. Gunakan http://localhost untuk callback lokal.');
+  }
+  if (redirect.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(redirect.hostname)) {
+    throw new Error('Generator ini hanya mendukung redirect localhost melalui HTTP demi keamanan.');
+  }
+  if (redirect.username || redirect.password || redirect.search || redirect.hash || redirect.port && redirect.port !== '80') {
+    throw new Error('GOOGLE_REDIRECT_URI tidak boleh berisi kredensial, query, atau hash.');
+  }
+  return redirect;
 }
 
-function createOAuth2Client() {
+function updateEnvValue(contents, key, value) {
+  const escaped = value.replace(/\\/g, '\\\\').replace(/\r?\n/g, '');
+  const line = `${key}=${escaped}`;
+  const pattern = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+  if (pattern.test(contents)) return contents.replace(pattern, line);
+  const suffix = contents.length && !contents.endsWith('\n') ? '\n' : '';
+  return `${contents}${suffix}${line}\n`;
+}
+
+async function saveRefreshToken(refreshToken) {
+  let contents = '';
+  try {
+    contents = await readFile(ENV_PATH, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+
+  const updated = updateEnvValue(contents, 'GOOGLE_REFRESH_TOKEN', refreshToken);
+  // Write the .env file directly; it is ignored by git. Preserve existing config.
+  await writeFile(ENV_PATH, updated, { encoding: 'utf8', mode: 0o600 });
+}
+
+function createOAuth2Client(redirectUri) {
   return new google.auth.OAuth2(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    process.env.GOOGLE_CLIENT_ID.trim(),
+    process.env.GOOGLE_CLIENT_SECRET.trim(),
+    redirectUri,
   );
 }
 
-function getAuthUrl(oauth2Client) {
-  return oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: SCOPES,
-    prompt: 'consent' // Force to get refresh_token
-  });
-}
+function waitForAuthorizationCode(oauth2Client, redirect) {
+  return new Promise((resolve, reject) => {
+    const callbackPath = redirect.pathname || '/';
+    let completed = false;
+    const finish = (error, code) => {
+      if (completed) return;
+      completed = true;
+      clearTimeout(timeout);
+      server.close(() => {});
+      if (error) reject(error);
+      else resolve(code);
+    };
 
-async function getAccessToken(oauth2Client, code) {
-  const { tokens } = await oauth2Client.getToken(code);
-  return tokens;
-}
+    const server = createServer((request, response) => {
+      let requestUrl;
+      try {
+        requestUrl = new URL(request.url || '/', REDIRECT_URI);
+      } catch {
+        response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('Permintaan callback tidak valid. Tutup halaman ini.');
+        return;
+      }
 
-function askQuestion(query) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+      if (requestUrl.pathname !== callbackPath) {
+        response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('Callback OAuth tidak ditemukan.');
+        return;
+      }
+      if (requestUrl.searchParams.get('error')) {
+        const providerError = requestUrl.searchParams.get('error');
+        response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end('<h2>Otorisasi Google tidak berhasil.</h2><p>Kamu bisa menutup halaman ini dan mencoba lagi di terminal.</p>');
+        finish(new Error(`Google menolak otorisasi: ${providerError}`));
+        return;
+      }
 
-  return new Promise(resolve => {
-    rl.question(query, answer => {
-      rl.close();
-      resolve(answer);
+      const code = requestUrl.searchParams.get('code');
+      const state = requestUrl.searchParams.get('state');
+      if (!code || state !== oauth2Client._oauth2ClientState) {
+        response.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end('<h2>Callback OAuth tidak lengkap atau tidak valid.</h2><p>Tutup halaman ini lalu jalankan generator kembali.</p>');
+        finish(new Error('Callback Google tidak berisi kode atau state yang valid.'));
+        return;
+      }
+
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end('<!doctype html><html lang="id"><meta charset="utf-8"><title>Google Drive terhubung</title><body style="font-family:system-ui;max-width:36rem;margin:4rem auto;padding:0 1rem"><h2>Otorisasi Google berhasil</h2><p>Kamu bisa menutup tab ini dan kembali ke terminal bot.</p></body></html>');
+      finish(null, code);
+    });
+
+    const timeout = setTimeout(() => finish(new Error('Waktu otorisasi habis setelah 5 menit. Jalankan ulang generator.')), CALLBACK_TIMEOUT_MS);
+    timeout.unref?.();
+    server.on('error', (error) => finish(new Error(`Tidak bisa membuka callback localhost: ${error.message}`)));
+    server.listen(Number(redirect.port || 80), redirect.hostname === '[::1]' ? '::1' : redirect.hostname, () => {
+      console.log(`Callback OAuth siap di ${redirect.origin}${callbackPath}`);
     });
   });
 }
 
 async function main() {
-  console.log('🔐 Google OAuth2 Token Generator\n');
-  console.log('=' .repeat(50));
-  
-  validateEnv();
-  
-  const oauth2Client = createOAuth2Client();
-  const authUrl = getAuthUrl(oauth2Client);
-  
-  console.log('\n📋 Instructions:');
-  console.log('1. Open this URL in your browser:');
-  console.log('\n   ' + authUrl + '\n');
-  console.log('2. Login with your Google account (Gmail personal 15GB)');
-  console.log('3. Grant permission for Google Drive access');
-  console.log('4. Copy the authorization code from the URL bar');
-  console.log('   (after redirect, it will be like: http://localhost/?code=4/xxx...)');
-  console.log('   Paste ONLY the code part (4/xxx...)\n');
-  
-  const code = await askQuestion('📝 Enter authorization code: ');
-  
-  if (!code.trim()) {
-    console.error('❌ No code provided. Exiting.');
-    process.exit(1);
-  }
-  
+  console.log('Google Drive OAuth2 Token Setup\n');
+  const redirect = validateEnv();
+  const oauth2Client = createOAuth2Client(REDIRECT_URI);
+  // State validation protects the localhost callback from unrelated requests.
+  const stateValue = randomBytes(24).toString('hex');
+  oauth2Client._oauth2ClientState = stateValue;
+  const authUrl = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: SCOPES,
+    prompt: 'consent',
+    state: stateValue,
+  });
+
+  console.log('Selesaikan persetujuan di browser yang akan dibuka.');
+  console.log(`Jika browser tidak terbuka, salin URL ini:\n${authUrl}\n`);
+  const callbackPromise = waitForAuthorizationCode(oauth2Client, redirect);
   try {
-    console.log('\n⏳ Exchanging code for tokens...');
-    const tokens = await getAccessToken(oauth2Client, code.trim());
-    
-    console.log('\n' + '='.repeat(50));
-    console.log('✅ SUCCESS! Tokens received:\n');
-    
-    if (tokens.refresh_token) {
-      console.log('🔑 GOOGLE_REFRESH_TOKEN (SAVE THIS!):');
-      console.log(tokens.refresh_token);
-      console.log('\n⚠️  IMPORTANT: Add this to your .env file:\n');
-      console.log(`GOOGLE_REFRESH_TOKEN=${tokens.refresh_token}`);
+    if (process.platform === 'win32') {
+      await execAsync(`start "" "${authUrl}"`, { windowsHide: true, shell: 'cmd.exe' });
+    } else if (process.platform === 'darwin') {
+      await execAsync('open "$URL"', { env: { ...process.env, URL: authUrl } });
     } else {
-      console.log('⚠️  Warning: No refresh_token received!');
-      console.log('   This might happen if you already authorized before.');
-      console.log('   Try revoking access at https://myaccount.google.com/permissions');
-      console.log('   Then run this script again.\n');
+      await execAsync('xdg-open "$URL"', { env: { ...process.env, URL: authUrl } });
     }
-    
-    console.log('📊 Other token info:');
-    console.log('   Access Token expires in:', tokens.expiry_date 
-      ? new Date(tokens.expiry_date).toLocaleString()
-      : 'Unknown');
-    console.log('   Scope:', tokens.scope);
-    
-    console.log('\n' + '='.repeat(50));
-    console.log('🎉 Setup complete! Add the refresh token to your .env');
-    console.log('   and restart your bot.\n');
-    
+  } catch {
+    console.log('Browser otomatis tidak bisa dibuka; silakan buka URL di atas secara manual.');
+  }
+
+  try {
+    const code = await callbackPromise;
+    console.log('Kode otorisasi diterima; menukar kode dengan token...');
+    const { tokens } = await oauth2Client.getToken(code);
+    if (!tokens.refresh_token) {
+      throw new Error('Google tidak mengirim refresh token. Cabut akses aplikasi di https://myaccount.google.com/permissions lalu jalankan ulang generator.');
+    }
+
+    await saveRefreshToken(tokens.refresh_token);
+    // Update this process too (the dotenv values are loaded once at startup).
+    process.env.GOOGLE_REFRESH_TOKEN = tokens.refresh_token;
+    console.log(`GOOGLE_REFRESH_TOKEN berhasil diperbarui di ${ENV_PATH}.`);
+    console.log('Jangan bagikan token tersebut. Restart bot agar konfigurasi baru digunakan.');
   } catch (error) {
-    console.error('\n❌ Error getting tokens:', error.message);
-    if (error.message.includes('invalid_grant')) {
-      console.error('\n💡 The authorization code may have expired.');
-      console.error('   Please generate a new URL and try again.');
-    }
-    process.exit(1);
+    console.error(`Gagal menyiapkan Google Drive OAuth: ${error.message}`);
+    process.exitCode = 1;
   }
 }
 
-main();
+main().catch((error) => {
+  console.error(`Gagal menyiapkan Google Drive OAuth: ${error.message}`);
+  process.exitCode = 1;
+});
