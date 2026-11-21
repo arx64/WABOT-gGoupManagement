@@ -49,16 +49,35 @@ function getFileExtension(media) {
   return extensions[mime] || '';
 }
 
-export async function uploadSeeMediaToDrive(buffer, media = {}) {
+export async function uploadSeeMediaToDrive(buffer, media = {}, { idempotencyKey } = {}) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new Error('Media kosong, tidak bisa diunggah ke Google Drive.');
   try {
     const drive = getDriveClient();
     const folderId = await ensureSeeDriveFolder(drive);
+    const stableKey = idempotencyKey ? String(idempotencyKey).slice(0, 120) : '';
+    if (stableKey) {
+      const existing = await drive.files.list({
+        q: `'${escapeDriveQuery(folderId)}' in parents and trashed = false and appProperties has { key='seeJobId' and value='${escapeDriveQuery(stableKey)}' }`,
+        pageSize: 1,
+        fields: 'files(id,name,webViewLink,mimeType,parents)',
+      });
+      const existingFile = existing.data.files?.[0];
+      if (existingFile?.id) {
+        return {
+          ...existingFile,
+          webViewLink: existingFile.webViewLink || `https://drive.google.com/file/d/${existingFile.id}/view`,
+        };
+      }
+    }
     const extension = getFileExtension(media);
     const originalName = media?.fileName || media?.filename;
     const filename = originalName || `see_${new Date().toISOString().replace(/[:.]/g, '-')}${extension}`;
     const result = await drive.files.create({
-      requestBody: { name: filename, parents: [folderId] },
+      requestBody: {
+        name: filename,
+        parents: [folderId],
+        ...(stableKey ? { appProperties: { seeJobId: stableKey } } : {}),
+      },
       media: { mimeType: media?.mimetype || 'application/octet-stream', body: Readable.from(buffer) },
       fields: 'id,name,webViewLink,mimeType,parents',
     });

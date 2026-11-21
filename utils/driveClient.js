@@ -7,8 +7,9 @@
 
 import 'dotenv/config';
 import { google } from 'googleapis';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rename, chmod } from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 const ENV_PATH = path.resolve(process.cwd(), '.env');
 let oauthClient;
@@ -30,11 +31,31 @@ async function persistRefreshToken(token) {
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  await writeFile(ENV_PATH, updateEnvValue(contents, 'GOOGLE_REFRESH_TOKEN', token), {
-    encoding: 'utf8',
-    mode: 0o600,
-  });
+  await atomicWriteEnv(updateEnvValue(contents, 'GOOGLE_REFRESH_TOKEN', token));
   process.env.GOOGLE_REFRESH_TOKEN = token;
+}
+
+async function atomicWriteEnv(contents) {
+  const tempPath = `${ENV_PATH}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tempPath, contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    try { await chmod(tempPath, 0o600); } catch { /* Windows may not support POSIX modes. */ }
+    await rename(tempPath, ENV_PATH);
+  } catch (error) {
+    try { await import('node:fs/promises').then(({ unlink }) => unlink(tempPath)); } catch { /* best effort */ }
+    throw error;
+  }
+}
+
+/** Persist a newly authorized refresh token and update the live OAuth client. */
+export async function updateGoogleRefreshToken(token, credentials = {}) {
+  if (typeof token !== 'string' || !token.trim()) {
+    throw new Error('Google tidak memberikan refresh token yang valid.');
+  }
+  await persistRefreshToken(token.trim());
+  if (oauthClient) {
+    oauthClient.setCredentials({ ...credentials, refresh_token: token.trim() });
+  }
 }
 
 // Validate required environment variables
@@ -157,5 +178,6 @@ export default {
   getOAuthClient,
   getDriveClient,
   refreshGoogleAccessToken,
-  testConnection
+  testConnection,
+  updateGoogleRefreshToken,
 };

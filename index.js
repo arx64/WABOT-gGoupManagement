@@ -4,11 +4,9 @@ import { spawn } from 'node:child_process';
 
 import 'dotenv/config';
 import dotenv from 'dotenv';
-import QRCode from 'qrcode';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys';
-import qrcode from 'qrcode-terminal';
 import { responAI } from './gpt.js';
 import { fetchData } from './jadwalKelas.js';
 import { tagAll } from './tagAllFunc.js';
@@ -35,14 +33,15 @@ import {
   stopSendScheduler,
 } from './sendScheduler.js';
 import { cacheMessage, getCachedMessage, createDeletedMessageNotification } from './utils/deletedMessageHandler.js';
+import { createEditedMessageNotification } from './utils/editedMessageHandler.js';
 import { scheduleDeletedNotificationExpiry, startDeletedNotificationExpiry } from './utils/deletedNotificationExpiry.js';
 import { extractViewOnceContent } from './utils/viewOnce.js';
 import { uploadSeeMediaToDrive, SEE_DRIVE_FOLDER_NAME } from './utils/seeDrive.js';
+import { isGoogleReauthRequired, queueGoogleOAuthRecovery, registerGoogleOAuthRecoveryRoutes } from './utils/googleOAuthRecovery.js';
 import { handleUktCommand } from './uktManager.js';
 import { startUktReminderScheduler, stopUktReminderScheduler } from './uktReminder.js';
 
 let sock;
-let qrDataURL = null;
 let BOT_PHONE = ''; // nomor bot (untuk wa.me link), terisi saat koneksi open
 const activeGuess = new Map(); // userJid → { word }
 const userScores = {}; // userJid → skor
@@ -56,6 +55,9 @@ const MAX_CACHE_SIZE = 100; // Max messages per chat
 // ===== DELETED MESSAGE DETECTION CONFIG =====
 // Set DELETED_MESSAGE_DETECTION=false di .env untuk menonaktifkan
 let DELETED_MESSAGE_DETECTION = process.env.DELETED_MESSAGE_DETECTION !== 'false';
+
+// Set EDITED_MESSAGE_DETECTION=false in .env to disable edit notifications.
+let EDITED_MESSAGE_DETECTION = process.env.EDITED_MESSAGE_DETECTION !== 'false';
 
 // ===== OWNER CONFIG =====
 let OWNER_NUMBER = process.env.OWNER_NUMBER || '';
@@ -180,14 +182,16 @@ function addToViewOnceCache(chatJid, message) {
   }
 }
 
-// Helper to find recent view-once message in cache
-function findRecentViewOnce(chatJid) {
+function findRecentViewOnce(chatJid, messageId = null) {
   const cache = viewOnceCache.get(chatJid);
   if (!cache || cache.length === 0) return null;
-  // Return the most recent one
+  if (messageId) {
+    for (let index = cache.length - 1; index >= 0; index -= 1) {
+      if (cache[index].message?.key?.id === messageId) return cache[index].message;
+    }
+  }
   return cache[cache.length - 1].message;
 }
-
 function getRegularMediaPayload(viewOnce) {
   const { mediaType, mediaMessage } = viewOnce;
   if (!mediaType || !mediaMessage) {
@@ -254,7 +258,11 @@ async function downloadViewOnceMedia(sock, sourceMessage, viewOnce) {
   }
 }
 
-async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage, { uploadToDrive = false } = {}) {
+async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage, {
+  uploadToDrive = false,
+  onOAuthRecovery,
+  idempotencyKey,
+} = {}) {
   const viewOnce = extractViewOnceContent(sourceMessage);
   if (!viewOnce) {
     throw new Error('Pesan bukan media view-once.');
@@ -268,10 +276,19 @@ async function sendViewOnceAsFile(sock, remoteJid, sourceMessage, quotedMessage,
   let driveError = null;
   if (uploadToDrive) {
     try {
-      driveFile = await uploadSeeMediaToDrive(buffer, viewOnce.mediaMessage);
+      driveFile = await uploadSeeMediaToDrive(buffer, viewOnce.mediaMessage, { idempotencyKey });
     } catch (error) {
       driveError = error;
       console.error('[see] Upload Google Drive gagal:', error.message);
+      if (isGoogleReauthRequired(error) && typeof onOAuthRecovery === 'function') {
+        try {
+          await onOAuthRecovery({ buffer, mediaMessage: viewOnce.mediaMessage, payload });
+          return { sent: false, pendingAuth: true, driveError };
+        } catch (queueError) {
+          driveError = queueError;
+          console.error('[see] Tidak bisa mengantrekan upload untuk OAuth ulang:', queueError.message);
+        }
+      }
     }
   }
 
@@ -350,7 +367,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ENV_PATH = path.join(__dirname, '.env');
 
-// persistent auth handled by useMultiFileAuthState; no manual pairing request
+// Login WhatsApp menggunakan pairing code (tanpa QR)
 let isLoggedIn = false;
 
 // ===== SIAKAD KHS SCRAPPING (dari "Scrapping KHS") =====
@@ -691,29 +708,8 @@ function generateMenu(userName, isGroup) {
 }
 
 const app = express();
-app.use(express.static(__dirname));
-
-// halaman viewer QR — auto refresh
-app.get('/qr', (req, res) => {
-  if (isLoggedIn) {
-    return res.send('<h2>Bot sudah login.</h2>');
-  }
-
-  res.send(`
-    <html>
-      <head>
-        <meta http-equiv="refresh" content="3">
-      </head>
-      <body style="display:flex;align-items:center;justify-content:center;height:100vh;background:#111;">
-        <div style="text-align:center;color:white;">
-          <h2>Scan QR WhatsApp</h2>
-          ${qrDataURL ? `<img src="${qrDataURL}" style="max-width:300px;" />` : `<p>Menunggu QR dari server...</p>`}
-          <p style="color:gray;">Auto refresh setiap 3 detik</p>
-        </div>
-      </body>
-    </html>
-  `);
-});
+// Do not expose the project directory: it contains .env and WhatsApp auth files.
+registerGoogleOAuthRecoveryRoutes(app);
 
 // port: gunakan PORT dari env (Railway, Fly.io, Northflank, Render, dll semua set PORT)
 const PORT = Number(process.env.PORT) || 2004;
@@ -728,7 +724,7 @@ const PUBLIC_HOST =
     process.env.FLY_REGION &&
     `https://${process.env.FLY_APP_NAME}.fly.dev` ||
   `localhost:${PORT}`;
-app.listen(PORT, '0.0.0.0', () => console.log(`🌐 QR viewer: http://${PUBLIC_HOST}/qr`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🌐 Server berjalan di http://${PUBLIC_HOST}`));
 
 async function connectToWhatsApp() {
   // ===== LOG AUTO VIEW-ONCE & AUTO VIEW STORY CONFIG =====
@@ -751,6 +747,7 @@ async function connectToWhatsApp() {
   }
   
   console.log(`📝 DELETED MESSAGE: ${DELETED_MESSAGE_DETECTION ? '✅ Aktif' : '⏸️  Nonaktif'}`);
+  console.log(`✏️ EDITED MESSAGE: ${EDITED_MESSAGE_DETECTION ? '✅ Aktif' : '⏸️  Nonaktif'}`);
   console.log(`🔐 OWNER NUMBER: ${OWNER_NUMBER ? `✅ ${OWNER_NUMBER}` : '⏸️  Tidak diset'}`);
   
   console.log('═'.repeat(60) + '\n');
@@ -772,31 +769,35 @@ async function connectToWhatsApp() {
     patchMessageBeforeSending: (msg) => msg,
   });
 
+  // Baileys pairing code: masukkan nomor WhatsApp lengkap dengan kode negara,
+  // tanpa tanda +, spasi, atau tanda baca (contoh: 628xxxxxxxxxx).
+  if (!state.creds.registered) {
+    const pairingPhone = (process.env.WA_PAIRING_PHONE || '').replace(/\D/g, '');
+    if (!pairingPhone) {
+      console.error('❌ WA_PAIRING_PHONE belum diisi di .env. Contoh: WA_PAIRING_PHONE=628xxxxxxxxxx');
+    } else {
+      setTimeout(async () => {
+        try {
+          const code = await sock.requestPairingCode(pairingPhone);
+          console.log(`🔐 KODE PAIRING WHATSAPP: ${code}`);
+          console.log('Buka WhatsApp > Perangkat tertaut > Tautkan perangkat > Tautkan dengan nomor telepon, lalu masukkan kode tersebut.');
+        } catch (error) {
+          console.error('❌ Gagal meminta kode pairing:', error?.message || error);
+        }
+      }, 3000);
+    }
+  }
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
 
     console.log('📶 Status koneksi:', connection);
-
-    if (update.qr && !isLoggedIn) {
-      console.log('🔳 QR diterima — generate base64');
-
-      QRCode.toDataURL(update.qr, (err, url) => {
-        if (err) {
-          console.error('Gagal generate QR:', err);
-          return;
-        }
-
-        qrDataURL = url;
-        console.log('✅ QR updated (base64)');
-      });
-    }
 
     if (lastDisconnect?.error) {
       console.error('🔴 Error:', lastDisconnect.error?.output?.payload?.message || lastDisconnect.error.message);
     }
     if (connection === 'open') {
       isLoggedIn = true;
-      qrDataURL = null; // reset QR
 
       // Tangkap nomor bot untuk wa.me link
       try {
@@ -823,7 +824,6 @@ async function connectToWhatsApp() {
       }
     }
     if (connection === 'close') {
-      qrDataURL = null; // reset QR
       const reason = lastDisconnect?.error?.output?.statusCode;
       console.log('❌ Koneksi tertutup. Alasan:', reason);
       if (reason !== DisconnectReason.loggedOut) {
@@ -1214,7 +1214,11 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
       if (chatMessage.trim().toLowerCase() === '/see') {
         const quotedContext = msg.message?.extendedTextMessage?.contextInfo;
         const quotedMessage = quotedContext?.quotedMessage;
-        const targetMessage = quotedMessage
+        // contextInfo.quotedMessage may omit mediaKey; prefer the complete cached WAMessage.
+        const cachedQuotedMessage = quotedContext?.stanzaId
+          ? findRecentViewOnce(remoteJid, quotedContext.stanzaId)
+          : null;
+        const targetMessage = cachedQuotedMessage || (quotedMessage
           ? {
               key: {
                 remoteJid,
@@ -1224,7 +1228,7 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
               },
               message: quotedMessage,
             }
-          : findRecentViewOnce(remoteJid);
+          : findRecentViewOnce(remoteJid));
 
         if (!targetMessage) {
           await sock.sendMessage(
@@ -1238,14 +1242,38 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
         try {
           const outputJid = getSeeOutputJid(remoteJid);
           const outputIsOriginalChat = outputJid === remoteJid;
+          const idempotencyKey = `${remoteJid}:${targetMessage.key?.id || quotedContext?.stanzaId || msg.key?.id || 'unknown'}`;
+          const ownerNumber = normalizeJidNumber(OWNER_NUMBER);
+          const ownerJid = ownerNumber ? `${ownerNumber}@s.whatsapp.net` : '';
           const result = await sendViewOnceAsFile(
             sock, outputJid, targetMessage, outputIsOriginalChat ? msg : undefined,
-            { uploadToDrive: true },
+            {
+              uploadToDrive: true,
+              idempotencyKey,
+              onOAuthRecovery: ({ buffer, mediaMessage, payload }) => queueGoogleOAuthRecovery({
+                jobId: idempotencyKey,
+                sock,
+                ownerJid,
+                run: async () => {
+                  const driveFile = await uploadSeeMediaToDrive(buffer, mediaMessage, { idempotencyKey });
+                  await sock.sendMessage(outputJid, payload, outputIsOriginalChat ? { quoted: msg } : undefined);
+                  await sock.sendMessage(remoteJid, {
+                    text: `✅ File telah dikirim sebagai file biasa dan berhasil diunggah ke Google Drive setelah autentikasi ulang.\n\n📁 Folder: ${SEE_DRIVE_FOLDER_NAME}\n📄 File: ${driveFile.name}\n🔗 ${driveFile.webViewLink}`,
+                  }, { quoted: msg });
+                },
+              }),
+            },
           );
-          const confirmation = result.driveFile
-            ? `File telah dikirim sebagai file biasa dan berhasil diunggah ke Google Drive.\n\n📁 Folder: ${SEE_DRIVE_FOLDER_NAME}\n📄 File: ${result.driveFile.name}\n🔗 ${result.driveFile.webViewLink}`
-            : `File telah dikirim sebagai file biasa, tetapi upload Google Drive gagal.\n📁 Folder tujuan: ${SEE_DRIVE_FOLDER_NAME}\n⚠️ ${result.driveError?.message || 'Kesalahan tidak diketahui'}`;
-          await sock.sendMessage(remoteJid, { text: confirmation }, { quoted: msg });
+          if (result.pendingAuth) {
+            await sock.sendMessage(remoteJid, {
+              text: '⏳ Upload /see ditahan sementara karena autentikasi Google diperlukan. Link autentikasi resmi sudah dikirim ke WhatsApp owner. Setelah kamu menyelesaikan persetujuan Google, file akan otomatis diunggah ke Drive dan dikirim sebagai file biasa.',
+            }, { quoted: msg });
+          } else {
+            const confirmation = result.driveFile
+              ? `File telah dikirim sebagai file biasa dan berhasil diunggah ke Google Drive.\n\n📁 Folder: ${SEE_DRIVE_FOLDER_NAME}\n📄 File: ${result.driveFile.name}\n🔗 ${result.driveFile.webViewLink}`
+              : `File telah dikirim sebagai file biasa, tetapi upload Google Drive gagal.\n📁 Folder tujuan: ${SEE_DRIVE_FOLDER_NAME}\n⚠️ ${result.driveError?.message || 'Kesalahan tidak diketahui'}`;
+            await sock.sendMessage(remoteJid, { text: confirmation }, { quoted: msg });
+          }
         } catch (error) {
           console.error('Error downloading/sending view-once media:', error);
           await sock.sendMessage(
@@ -3100,6 +3128,58 @@ ${soal.soal}`,
       }
     } catch (error) {
       console.error('Error in messages.update handler:', error);
+    }
+  });
+
+  // ===== HANDLE EDITED MESSAGES =====
+  // Baileys emits update.message.editedMessage.message for ProtocolMessage.MESSAGE_EDIT.
+  sock.ev.on('messages.update', async (updates) => {
+    if (!EDITED_MESSAGE_DETECTION) return;
+    try {
+      for (const { key, update } of updates) {
+        const editedMessage = update?.message?.editedMessage?.message;
+        if (!editedMessage || !key?.remoteJid || !key?.id || key.fromMe) continue;
+
+        const remoteJid = key.remoteJid;
+        const cachedData = getCachedMessage(remoteJid, key.id);
+        if (!cachedData) {
+          console.log(`[edited-message] Pesan lama tidak ditemukan di cache (${key.id}); notifikasi dilewati.`);
+          continue;
+        }
+
+        if (!OWNER_NUMBER) {
+          console.log(`[edited-message] OWNER_NUMBER belum diset; pesan edit di ${remoteJid} tidak dilaporkan.`);
+          continue;
+        }
+
+        const ownerJid = OWNER_NUMBER.endsWith('@s.whatsapp.net')
+          ? OWNER_NUMBER
+          : `${OWNER_NUMBER.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+        const isGroup = remoteJid.endsWith('@g.us');
+        let groupName = '';
+        if (isGroup) {
+          try {
+            const metadata = await sock.groupMetadata(remoteJid);
+            groupName = metadata?.subject || '';
+          } catch (metadataError) {
+            console.warn('[edited-message] Gagal mengambil nama grup:', metadataError.message);
+          }
+        }
+
+        const notification = createEditedMessageNotification({ cachedData, editedMessage, chatJid: remoteJid, groupName });
+        const sent = await sock.sendMessage(ownerJid, { text: notification });
+        await scheduleDeletedNotificationExpiry(ownerJid, sent?.key);
+        // Simpan versi terbaru agar edit berikutnya membandingkan versi sebelumnya,
+        // dan jika pesan kemudian dihapus, cache berisi konten terakhir.
+        cacheMessage(remoteJid, key.id, {
+          ...cachedData.message,
+          message: editedMessage,
+          pushName: cachedData.pushName,
+        });
+        console.log(`✅ Pesan edit terdeteksi di ${remoteJid} dan dilaporkan ke owner ${OWNER_NUMBER}`);
+      }
+    } catch (error) {
+      console.error('[edited-message] Error memproses notifikasi pesan edit:', error);
     }
   });
 }
