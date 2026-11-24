@@ -78,7 +78,7 @@ export async function queueGoogleOAuthRecovery({ jobId, run, sock, ownerJid }) {
     const state = randomBytes(32).toString('hex');
     const authUrl = oauth.generateAuthUrl({
       access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/drive.file'],
+      scope: ['https://www.googleapis.com/auth/drive'],
       prompt: 'consent',
       include_granted_scopes: true,
       state,

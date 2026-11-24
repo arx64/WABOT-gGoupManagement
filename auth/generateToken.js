@@ -15,7 +15,7 @@ import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const SCOPES = ['https://www.googleapis.com/auth/drive'];
 const ENV_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.env');
 const REDIRECT_URI = (process.env.GOOGLE_REDIRECT_URI || 'http://localhost').trim();
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
