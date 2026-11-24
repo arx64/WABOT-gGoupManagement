@@ -764,7 +764,7 @@ async function connectToWhatsApp() {
   const sock = makeWASocket({
     auth: state,
     version: version,
-    browser: ['Ipinn', 'Windows', '110.0.5481.177'], // simulate real browser
+    browser: ['Chrome', 'Chrome', '110.0.5481.177'], // canonical browser metadata for WhatsApp pairing
     connectTimeoutMs: 60_000,
     patchMessageBeforeSending: (msg) => msg,
   });
@@ -772,19 +772,29 @@ async function connectToWhatsApp() {
   // Baileys pairing code: masukkan nomor WhatsApp lengkap dengan kode negara,
   // tanpa tanda +, spasi, atau tanda baca (contoh: 628xxxxxxxxxx).
   if (!state.creds.registered) {
-    const pairingPhone = (process.env.WA_PAIRING_PHONE || '').replace(/\D/g, '');
+    const pairingPhone = (process.env.OWNER_NUMBER || '').replace(/\D/g, '');
+    let pairingRequested = false;
     if (!pairingPhone) {
-      console.error('❌ WA_PAIRING_PHONE belum diisi di .env. Contoh: WA_PAIRING_PHONE=628xxxxxxxxxx');
+      console.error('❌ OWNER_NUMBER belum diisi di .env. Contoh: OWNER_NUMBER=628xxxxxxxxxx');
     } else {
-      setTimeout(async () => {
+      const requestPairingCode = async () => {
+        if (pairingRequested || state.creds.registered) return;
+        pairingRequested = true;
         try {
-          const code = await sock.requestPairingCode(pairingPhone);
+          const rawCode = await sock.requestPairingCode(pairingPhone);
+          const code = rawCode.replace(/\s+/g, '').match(/.{1,4}/g)?.join('-') || rawCode;
           console.log(`🔐 KODE PAIRING WHATSAPP: ${code}`);
           console.log('Buka WhatsApp > Perangkat tertaut > Tautkan perangkat > Tautkan dengan nomor telepon, lalu masukkan kode tersebut.');
         } catch (error) {
+          pairingRequested = false;
           console.error('❌ Gagal meminta kode pairing:', error?.message || error);
         }
-      }, 3000);
+      };
+
+      // Request only after Baileys has received the initial pairing handshake.
+      sock.ev.on('connection.update', ({ qr }) => {
+        if (qr) setTimeout(requestPairingCode, 500);
+      });
     }
   }
 
