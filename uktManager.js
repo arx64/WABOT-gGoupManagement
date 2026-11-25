@@ -10,6 +10,11 @@ const __dirname = path.dirname(__filename);
 // Months in the UKT installment schedule: Jan, Mar-Jul, Sep-Dec (no Feb/Aug).
 const DEFAULT_MONTHS = [1, 3, 4, 5, 6, 7, 9, 10, 11, 12];
 const UKT_ARCHIVE_FOLDER_NAME = 'UKT Yulia Khairani';
+const GOOGLE_OAUTH_REGENERATE_URL = 'https://arifin.ai.id/oauth/google';
+
+function googleOAuthHelp(error) {
+  return `${error?.message || error}\n🔐 Regenerasi token Google Drive: ${GOOGLE_OAUTH_REGENERATE_URL}`;
+}
 const UKT_INSTALLMENT_AMOUNTS = {
   1: 500_000,
   3: 1_500_000,
@@ -361,7 +366,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
         response += `\nBelum ada bukti untuk:\n${notRecorded.join('\n')}\n`;
       }
     }
-    if (remoteError) response += '⚠️ Google Drive tidak bisa diperiksa; daftar ini hanya berdasarkan data lokal.\n';
+    if (remoteError) response += `⚠️ Google Drive tidak bisa diperiksa; daftar ini hanya berdasarkan data lokal.\n🔐 Regenerasi token: ${GOOGLE_OAUTH_REGENERATE_URL}\n`;
     response += `Total bulan tercatat: ${paidPeriods.size}.`;
     await sock.sendMessage(remoteJid, { text: response }, { quoted: messageObj });
     return true;
@@ -428,7 +433,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
     } catch (localError) {
       console.error('[UKT] Fallback lokal gagal:', localError);
       await sock.sendMessage(remoteJid, {
-        text: `❌ Gagal menyimpan bukti UKT ke Google Drive maupun lokal.\nDrive: ${driveError.message}\nLokal: ${localError.message}`,
+        text: `❌ Gagal menyimpan bukti UKT ke Google Drive maupun lokal.\nDrive: ${googleOAuthHelp(driveError)}\nLokal: ${localError.message}`,
       }, { quoted: messageObj });
       return true;
     }
@@ -444,7 +449,7 @@ export async function handleUktCommand(messageObj, sock, remoteJid, numberUser, 
     ? `Google Drive (${UKT_ARCHIVE_FOLDER_NAME}/${dateParts.year}/${dateParts.monthName})\n${record.driveLink}`
     : `penyimpanan lokal (${dateParts.year}/${dateParts.monthName})\n${record.localPath}\n⚠️ Google Drive gagal: file tetap tersimpan di bot.`;
   await sock.sendMessage(remoteJid, {
-    text: `✅ *Bukti UKT berhasil disimpan*\n\n📅 Periode: ${dateParts.monthName} ${dateParts.year}\n📄 File: ${record.filename}\n📁 Lokasi: ${where}`,
+    text: `✅ *Bukti UKT berhasil disimpan*\n\n📅 Periode: ${dateParts.monthName} ${dateParts.year}\n📄 File: ${record.filename}\n📁 Lokasi: ${where}${record.source === 'local' ? `\n🔐 Regenerasi token Google Drive: ${GOOGLE_OAUTH_REGENERATE_URL}` : ''}`,
   }, { quoted: messageObj });
   return true;
 }
