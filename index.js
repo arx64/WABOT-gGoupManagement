@@ -3,6 +3,7 @@ import os from 'node:os';
 import express from 'express';
 import fs from 'fs';
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 
 import 'dotenv/config';
 import dotenv from 'dotenv';
@@ -747,6 +748,38 @@ function generateMenu(userName, isGroup) {
 }
 
 const app = express();
+
+// Cloudflare Tunnel mengarah langsung ke Express (port 2004). Teruskan
+// aplikasi PHP UCDrive-Viewer ke Nginx lokal tanpa mengubah route bot lain.
+app.use('/UCDrive-Viewer', (req, res) => {
+  const proxyPath = `/UCDrive-Viewer${req.url || '/'}`;
+  const proxyReq = http.request({
+    hostname: '127.0.0.1',
+    port: 8080,
+    path: proxyPath,
+    method: req.method,
+    headers: {
+      ...req.headers,
+      host: 'arifin.ai.id',
+      connection: 'close',
+    },
+  }, (proxyRes) => {
+    res.status(proxyRes.statusCode || 502);
+    for (const [key, value] of Object.entries(proxyRes.headers)) {
+      if (value !== undefined && key.toLowerCase() !== 'transfer-encoding') {
+        res.setHeader(key, value);
+      }
+    }
+    proxyRes.pipe(res);
+  });
+  proxyReq.on('error', (error) => {
+    console.error('[UCDrive-Viewer proxy]', error.message);
+    if (!res.headersSent) res.status(502).send('UCDrive-Viewer tidak tersedia');
+    else res.end();
+  });
+  req.pipe(proxyReq);
+});
+
 let previousNetworkSample = null;
 let previousCpuSample = null;
 
