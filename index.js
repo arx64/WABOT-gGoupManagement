@@ -831,6 +831,8 @@ function formatUptime(seconds) {
   return `${days}d ${hours}j ${minutes}m`;
 }
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/privacy', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'privacy.html')));
+app.get('/terms', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'terms.html')));
 app.get('/api/status', (_req, res) => {
   res.json({ service: 'whatsapp-bot', status: whatsappConnection === 'open' ? 'online' : whatsappConnection, whatsapp: whatsappConnection, botPhone: BOT_PHONE || null, uptimeSeconds: Math.floor((Date.now() - processStartedAt) / 1000), checkedAt: new Date().toISOString() });
 });
