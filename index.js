@@ -183,14 +183,24 @@ function addToViewOnceCache(chatJid, message) {
 }
 
 function findRecentViewOnce(chatJid, messageId = null) {
-  const cache = viewOnceCache.get(chatJid);
-  if (!cache || cache.length === 0) return null;
+  const caches = [];
+  const localCache = viewOnceCache.get(chatJid);
+  if (localCache) caches.push(localCache);
+  // WhatsApp may represent the same chat as @lid or @s.whatsapp.net between
+  // the original media event and the /see reply. Search every cache by stanza
+  // id so the original WAMessage, including its media key, is recoverable.
   if (messageId) {
-    for (let index = cache.length - 1; index >= 0; index -= 1) {
-      if (cache[index].message?.key?.id === messageId) return cache[index].message;
+    for (const cache of viewOnceCache.values()) {
+      if (cache === localCache) continue;
+      caches.push(cache);
+    }
+    for (const cache of caches) {
+      for (let index = cache.length - 1; index >= 0; index -= 1) {
+        if (cache[index].message?.key?.id === messageId) return cache[index].message;
+      }
     }
   }
-  return cache[cache.length - 1].message;
+  return localCache?.[localCache.length - 1]?.message || null;
 }
 function getRegularMediaPayload(viewOnce) {
   const { mediaType, mediaMessage } = viewOnce;
