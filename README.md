@@ -5,9 +5,9 @@ Bot WhatsApp berbasis Node.js untuk pengingat jadwal, otomasi akademik, pengelol
 ## Fitur utama
 
 - Koneksi WhatsApp menggunakan Baileys.
-- QR viewer melalui web pada endpoint `/qr`.
-- Reminder jadwal kuliah dan pengiriman pesan terjadwal.
-- Integrasi EdLink untuk jadwal, tugas, dan absensi.
+- Autentikasi WhatsApp menggunakan pairing code; sesi tersimpan di `auth_info_baileys/`.
+- Landing page publik dan status bot tersedia pada endpoint `/` dan `/api/status`.
+- QR viewer tidak digunakan pada deployment saat ini.
 - Scraping KRS/KHS, transkrip, dan KTM melalui `app.py`.
 - Upload file ke Google Drive.
 - Manajemen grup: tambah anggota, keluarkan anggota, tag semua anggota, dan ekspor anggota.
@@ -44,16 +44,30 @@ Jangan commit file `.env` atau kredensial apa pun ke repository.
 npm start
 ```
 
-Secara default, QR viewer berjalan pada port `2004` dan dapat dibuka di:
+Bot menjalankan server HTTP pada port `2004` secara default. Landing page dapat dibuka di:
 
 ```text
-http://localhost:2004/qr
+http://localhost:2004/
 ```
+
+Status bot real-time tersedia di:
+
+```text
+http://localhost:2004/api/status
+```
+
+Saat sesi WhatsApp belum tersedia, bot menampilkan pairing code pada log sesuai alur autentikasi Baileys. Setelah pairing berhasil, sesi disimpan di `auth_info_baileys/` dan tidak perlu pairing ulang selama sesi tetap valid.
 
 Server mendengarkan pada `0.0.0.0`, sehingga dapat diakses dari perangkat lain dalam jaringan yang sama menggunakan alamat IP komputer, misalnya:
 
 ```text
-http://192.168.8.6:2004/qr
+http://192.168.8.6:2004/
+```
+
+Untuk deployment VPS melalui Cloudflare Tunnel, arahkan hostname publik ke service internal:
+
+```text
+https://arifin.ai.id/ → http://127.0.0.1:2004
 ```
 
 Jika port perlu diubah, tambahkan pada `.env`:
@@ -66,7 +80,7 @@ PORT=2004
 
 Variabel penting yang tersedia di `.env.example` antara lain:
 
-- `PORT` — port QR viewer.
+- `PORT` — port server landing page dan API status.
 - `NINE_ROUTER_BASE_URL`, `NINE_ROUTER_MODEL`, `NINE_ROUTER_FALLBACK_MODELS`, dan `NINE_ROUTER_API_KEY` — endpoint, model utama, daftar model cadangan (dipisahkan koma), dan autentikasi untuk command `/ai` melalui 9Router lokal. Fallback dicoba otomatis saat error menunjukkan model tidak tersedia.
 - `UKT_MONTHS` — daftar bulan pembayaran UKT yang dipantau sesuai jadwal cicilan: `Januari,Maret,April,Mei,Juni,Juli,September,Oktober,November,Desember`; Februari dan Agustus tidak termasuk.
 - `UKT_REMINDER_JID` — nomor/JID WhatsApp penerima pengingat UKT; jika kosong, memakai `OWNER_NUMBER`. Bot mengecek setiap menit dan mengirim pengingat tanggal 15 pukul 09.00 WIB jika belum ada bukti untuk bulan/tahun tersebut. Status pengingat disimpan agar tidak terkirim berulang kali.
@@ -132,7 +146,7 @@ Kirim gambar dengan caption `/ukt` untuk mengarsipkan bukti pembayaran. Bot memb
 
 ```text
 .
-├── index.js                 # Entry point bot dan QR viewer
+├── index.js                 # Entry point bot, landing page, dan API status
 ├── app.py                   # Otomasi/scraping SIAKAD
 ├── package.json             # Dependensi dan script npm
 ├── .env.example             # Template konfigurasi
