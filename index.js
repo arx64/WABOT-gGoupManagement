@@ -751,7 +751,8 @@ const app = express();
 
 // Cloudflare Tunnel mengarah langsung ke Express (port 2004). Teruskan
 // aplikasi PHP UCDrive-Viewer ke Nginx lokal tanpa mengubah route bot lain.
-app.use('/UCDrive-Viewer', (req, res) => {
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/UCDrive-Viewer')) return next();
   const proxyPath = `/UCDrive-Viewer${req.url || '/'}`;
   const proxyReq = http.request({
     hostname: '127.0.0.1',
