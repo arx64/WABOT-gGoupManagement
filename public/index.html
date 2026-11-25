@@ -52,6 +52,16 @@
 
 <span class="green">✓</span> <span id="terminal-message">memeriksa koneksi...</span></pre></div>
     </section>
+    <section class="wrap section server-section"><h2>Server real-time.</h2><p class="section-intro">Metrik VPS diperbarui setiap 10 detik.</p><div class="terminal"><div class="terminal-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><pre><span class="green">$</span> server metrics
+
+<span class="blue">cpu</span>        <span id="server-cpu">checking</span>
+<span class="blue">ram</span>        <span id="server-ram">checking</span>
+<span class="blue">storage</span>    <span id="server-storage">checking</span>
+<span class="blue">download</span>   <span id="server-download">checking</span>
+<span class="blue">upload</span>     <span id="server-upload">checking</span>
+<span class="blue">uptime</span>     <span id="server-uptime">checking</span>
+
+<span class="green">✓</span> <span id="server-message">memeriksa server...</span></pre></div></section>
     <section class="wrap section" id="fitur"><h2>Dibuat untuk kebutuhan nyata.</h2><p class="section-intro">Fitur yang langsung bisa dipakai dari WhatsApp.</p><div class="cards"><article class="card"><div class="icon">⏰</div><h3>Pengingat otomatis</h3><p>Jadwal dan pengingat dikirim tepat waktu tanpa perlu cek manual berulang kali.</p></article><article class="card"><div class="icon">📚</div><h3>Jadwal & tugas</h3><p>Akses informasi kelas, tugas, dan aktivitas akademik dari chat yang sama.</p></article><article class="card"><div class="icon">☁️</div><h3>Arsip Google Drive</h3><p>Simpan bukti pembayaran ke folder yang terstruktur dan mudah ditemukan.</p></article></div></section>
   </main>
   <footer><div class="wrap">© 2026 Arifin AI · Dibangun untuk automasi yang sederhana dan andal.</div></footer>
@@ -80,7 +90,25 @@
       }
     }
     refreshStatus();
+    async function refreshServerStats() {
+      try {
+        const response = await fetch('/api/server-stats', { cache: 'no-store' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        $('server-cpu').textContent = data.cpuPercent + '%';
+        $('server-ram').textContent = `${data.ramPercent}% (${data.ramUsed} / ${data.ramTotal})`;
+        $('server-storage').textContent = data.storagePercent === null ? 'unavailable' : `${data.storagePercent}% (${data.storageUsed} / ${data.storageTotal})`;
+        $('server-download').textContent = `${formatBytes(data.downloadBytesPerSecond)}/s`;
+        $('server-upload').textContent = `${formatBytes(data.uploadBytesPerSecond)}/s`;
+        $('server-uptime').textContent = formatUptime(data.serverUptimeSeconds);
+        $('server-message').textContent = 'metrik server aktif';
+      } catch {
+        $('server-message').textContent = 'metrik server tidak tersedia';
+      }
+    }
+    const formatBytes = (bytes) => { if (!bytes) return '0 B'; const units = ['B','KB','MB','GB']; const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; };
+    refreshServerStats();
     setInterval(refreshStatus, 10000);
-  </script>
+    setInterval(refreshServerStats, 10000);
 </body>
 </html>

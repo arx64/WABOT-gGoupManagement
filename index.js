@@ -1,3 +1,5 @@
+import os from 'node:os';
+
 import express from 'express';
 import fs from 'fs';
 import { spawn } from 'node:child_process';
@@ -731,16 +733,65 @@ function generateMenu(userName, isGroup) {
 }
 
 const app = express();
+let previousNetworkSample = null;
+let previousCpuSample = null;
+
+function readLinuxNetworkBytes() {
+  try {
+    const text = fs.readFileSync('/proc/net/dev', 'utf8');
+    return text.split('\n').slice(2).reduce((total, line) => {
+      const separator = line.indexOf(':');
+      if (separator < 0) return total;
+      const values = line.slice(separator + 1).trim().split(/\s+/).map(Number);
+      total.download += values[0] || 0;
+      total.upload += values[8] || 0;
+      return total;
+    }, { download: 0, upload: 0 });
+  } catch { return { download: 0, upload: 0 }; }
+}
+
+function getCpuUsage() {
+  const cpus = os.cpus();
+  const idle = cpus.reduce((sum, cpu) => sum + cpu.times.idle, 0);
+  const total = cpus.reduce((sum, cpu) => sum + Object.values(cpu.times).reduce((a, value) => a + value, 0), 0);
+  if (!previousCpuSample) { previousCpuSample = { idle, total }; return 0; }
+  const idleDelta = idle - previousCpuSample.idle;
+  const totalDelta = total - previousCpuSample.total;
+  previousCpuSample = { idle, total };
+  return totalDelta > 0 ? Math.max(0, Math.min(100, (1 - idleDelta / totalDelta) * 100)) : 0;
+}
+
+async function getStorageUsage() {
+  try {
+    const stats = await fs.promises.statfs(process.cwd());
+    const total = Number(stats.blocks) * Number(stats.bsize);
+    const free = Number(stats.bfree) * Number(stats.bsize);
+    return { usedPercent: total ? ((total - free) / total) * 100 : 0, total, free };
+  } catch { return { usedPercent: null, total: null, free: null }; }
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/api/status', (_req, res) => {
-  res.json({
-    service: 'whatsapp-bot',
-    status: whatsappConnection === 'open' ? 'online' : whatsappConnection,
-    whatsapp: whatsappConnection,
-    botPhone: BOT_PHONE || null,
-    uptimeSeconds: Math.floor((Date.now() - processStartedAt) / 1000),
-    checkedAt: new Date().toISOString(),
-  });
+  res.json({ service: 'whatsapp-bot', status: whatsappConnection === 'open' ? 'online' : whatsappConnection, whatsapp: whatsappConnection, botPhone: BOT_PHONE || null, uptimeSeconds: Math.floor((Date.now() - processStartedAt) / 1000), checkedAt: new Date().toISOString() });
+});
+app.get('/api/server-stats', async (_req, res) => {
+  const network = readLinuxNetworkBytes();
+  const now = Date.now();
+  const elapsed = previousNetworkSample ? Math.max((now - previousNetworkSample.time) / 1000, 0.001) : 0;
+  const download = previousNetworkSample ? (network.download - previousNetworkSample.download) / elapsed : 0;
+  const upload = previousNetworkSample ? (network.upload - previousNetworkSample.upload) / elapsed : 0;
+  previousNetworkSample = { ...network, time: now };
+  const storage = await getStorageUsage();
+  const memoryTotal = os.totalmem();
+  const memoryFree = os.freemem();
+  res.json({ cpuPercent: Number(getCpuUsage().toFixed(1)), ramPercent: Number(((1 - memoryFree / memoryTotal) * 100).toFixed(1)), ramUsed: formatBytes(memoryTotal - memoryFree), ramTotal: formatBytes(memoryTotal), storagePercent: storage.usedPercent === null ? null : Number(storage.usedPercent.toFixed(1)), storageUsed: storage.total === null ? null : formatBytes(storage.total - storage.free), storageTotal: storage.total === null ? null : formatBytes(storage.total), downloadBytesPerSecond: Math.max(0, download), uploadBytesPerSecond: Math.max(0, upload), serverUptimeSeconds: Math.floor(os.uptime()), checkedAt: new Date().toISOString() });
 });
 // Do not expose the project directory: it contains .env and WhatsApp auth files.
 registerGoogleOAuthRecoveryRoutes(app);
