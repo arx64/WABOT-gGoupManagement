@@ -239,22 +239,33 @@ function getRegularMediaPayload(viewOnce) {
 }
 
 async function downloadViewOnceMedia(sock, sourceMessage, viewOnce) {
-  // Preserve the complete WAMessage when available. It contains the key needed
-  // by Baileys if WhatsApp asks the client to re-upload an expired media URL.
+  // Keep the full WAMessage: quotedMessage often contains only the wrapper and
+  // omits mediaKey/directPath (Baileys #2907). The cached original is preferred
+  // by the /see caller, but retain a direct-media fallback for normalized payloads.
   const envelope = sourceMessage?.message
     ? sourceMessage
     : { message: sourceMessage };
+  const options = { reuploadRequest: sock.updateMediaMessage };
+  let firstError;
+  try {
+    return await downloadMediaMessage(envelope, 'buffer', {}, options);
+  } catch (error) {
+    firstError = error;
+    console.warn('[see] Download envelope gagal, mencoba media asli:', error.message);
+  }
 
+  const mediaContent = viewOnce.mediaType && viewOnce.mediaMessage
+    ? { [viewOnce.mediaType]: viewOnce.mediaMessage }
+    : viewOnce.content;
   try {
     return await downloadMediaMessage(
-      envelope,
+      { key: envelope.key, message: mediaContent },
       'buffer',
       {},
-      { reuploadRequest: sock.updateMediaMessage },
+      options,
     );
-  } catch (firstError) {
-    console.warn('Download view-once dari envelope gagal, mencoba inner media:', firstError.message);
-    return downloadMediaMessage({ message: viewOnce.content }, 'buffer');
+  } catch (secondError) {
+    throw new Error(`${secondError.message}; percobaan envelope: ${firstError.message}`);
   }
 }
 
@@ -930,8 +941,10 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
           remoteJid: remoteJidCache,
         });
       } else {
-        // Cache the complete WAMessage so /see without reply preserves its key.
-        if (!isFromMe) addToViewOnceCache(remoteJidCache, msg);
+        // Cache complete messages from every direction. A quoted view-once can
+        // omit mediaKey/directPath, including messages sent from this account;
+        // /see must be able to recover the original stanza (Baileys #2907).
+        addToViewOnceCache(remoteJidCache, msg);
 
         const senderCandidates = remoteJidCache?.endsWith('@g.us')
           ? [msg.key.participantAlt, msg.key.participant]
