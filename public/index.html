@@ -42,18 +42,45 @@
   <header class="wrap"><nav><a class="brand" href="/"><span class="logo">✦</span><span>Arifin AI</span></a><span class="navlink">WhatsApp Automation · arifin.ai.id</span></nav></header>
   <main>
     <section class="wrap hero">
-      <div><span class="eyebrow"><span>●</span> Sistem online</span><h1>Kerja lebih rapi. Otomatis.</h1><p class="lead">Bot WhatsApp untuk pengingat, pengelolaan grup, jadwal kuliah, bukti UKT, dan berbagai automasi harian dalam satu tempat.</p><div class="actions"><a class="button primary" href="https://wa.me/6285155288330">Hubungi bot</a><a class="button" href="#fitur">Lihat fitur</a></div></div>
+      <div><span class="eyebrow"><span id="status-dot">●</span> <span id="status-label">Memeriksa status...</span></span><h1>Kerja lebih rapi. Otomatis.</h1><p class="lead">Bot WhatsApp untuk pengingat, pengelolaan grup, jadwal kuliah, bukti UKT, dan berbagai automasi harian dalam satu tempat.</p><div class="actions"><a class="button primary" href="https://wa.me/6285155288330">Hubungi bot</a><a class="button" href="#fitur">Lihat fitur</a></div></div>
       <div class="terminal"><div class="terminal-top"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><pre><span class="green">$</span> status arifin-ai
 
 <span class="blue">service</span>    whatsapp-bot
-<span class="blue">status</span>     <span class="green">online</span>
-<span class="blue">secure</span>     cloudflare tunnel
-<span class="blue">uptime</span>     ready
+<span class="blue">status</span>     <span id="terminal-status" class="green">checking</span>
+<span class="blue">uptime</span>     <span id="terminal-uptime">checking</span>
+<span class="blue">checked</span>    <span id="terminal-checked">--</span>
 
-<span class="green">✓</span> siap menerima perintah</pre></div>
+<span class="green">✓</span> <span id="terminal-message">memeriksa koneksi...</span></pre></div>
     </section>
     <section class="wrap section" id="fitur"><h2>Dibuat untuk kebutuhan nyata.</h2><p class="section-intro">Fitur yang langsung bisa dipakai dari WhatsApp.</p><div class="cards"><article class="card"><div class="icon">⏰</div><h3>Pengingat otomatis</h3><p>Jadwal dan pengingat dikirim tepat waktu tanpa perlu cek manual berulang kali.</p></article><article class="card"><div class="icon">📚</div><h3>Jadwal & tugas</h3><p>Akses informasi kelas, tugas, dan aktivitas akademik dari chat yang sama.</p></article><article class="card"><div class="icon">☁️</div><h3>Arsip Google Drive</h3><p>Simpan bukti pembayaran ke folder yang terstruktur dan mudah ditemukan.</p></article></div></section>
   </main>
   <footer><div class="wrap">© 2026 Arifin AI · Dibangun untuk automasi yang sederhana dan andal.</div></footer>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const formatUptime = (seconds) => { const d = Math.floor(seconds / 86400), h = Math.floor(seconds % 86400 / 3600), m = Math.floor(seconds % 3600 / 60); return `${d}d ${h}j ${m}m`; };
+    async function refreshStatus() {
+      try {
+        const response = await fetch('/api/status', { cache: 'no-store' });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const data = await response.json();
+        const online = data.status === 'online';
+        $('status-label').textContent = online ? 'Sistem online' : 'WhatsApp ' + data.status;
+        $('status-dot').style.color = online ? 'var(--accent)' : '#ffd166';
+        $('terminal-status').textContent = data.status;
+        $('terminal-status').style.color = online ? 'var(--accent)' : '#ffd166';
+        $('terminal-uptime').textContent = formatUptime(data.uptimeSeconds);
+        $('terminal-checked').textContent = new Date(data.checkedAt).toLocaleTimeString('id-ID');
+        $('terminal-message').textContent = online ? 'siap menerima perintah' : 'menunggu koneksi WhatsApp...';
+      } catch (error) {
+        $('status-label').textContent = 'Status tidak tersedia';
+        $('status-dot').style.color = '#ff7a90';
+        $('terminal-status').textContent = 'offline';
+        $('terminal-status').style.color = '#ff7a90';
+        $('terminal-message').textContent = 'server tidak merespons';
+      }
+    }
+    refreshStatus();
+    setInterval(refreshStatus, 10000);
+  </script>
 </body>
 </html>

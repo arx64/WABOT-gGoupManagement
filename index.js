@@ -42,6 +42,8 @@ import { handleUktCommand } from './uktManager.js';
 import { startUktReminderScheduler, stopUktReminderScheduler } from './uktReminder.js';
 
 let sock;
+let whatsappConnection = 'starting';
+const processStartedAt = Date.now();
 let BOT_PHONE = ''; // nomor bot (untuk wa.me link), terisi saat koneksi open
 const activeGuess = new Map(); // userJid → { word }
 const userScores = {}; // userJid → skor
@@ -730,6 +732,16 @@ function generateMenu(userName, isGroup) {
 
 const app = express();
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/api/status', (_req, res) => {
+  res.json({
+    service: 'whatsapp-bot',
+    status: whatsappConnection === 'open' ? 'online' : whatsappConnection,
+    whatsapp: whatsappConnection,
+    botPhone: BOT_PHONE || null,
+    uptimeSeconds: Math.floor((Date.now() - processStartedAt) / 1000),
+    checkedAt: new Date().toISOString(),
+  });
+});
 // Do not expose the project directory: it contains .env and WhatsApp auth files.
 registerGoogleOAuthRecoveryRoutes(app);
 // port: gunakan PORT dari env (Railway, Fly.io, Northflank, Render, dll semua set PORT)
@@ -821,6 +833,7 @@ async function connectToWhatsApp() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect } = update;
+    if (connection) whatsappConnection = connection;
 
     console.log('📶 Status koneksi:', connection);
 
