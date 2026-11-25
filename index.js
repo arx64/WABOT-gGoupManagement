@@ -616,6 +616,13 @@ const MENU_CATEGORIES = {
       { cmd: '/ai [Pesan]', desc: 'Chat dengan AI' }
     ]
   },
+  utility: {
+    emoji: '🏓',
+    title: 'UTILITY',
+    commands: [
+      { cmd: '/ping', desc: 'Cek respons bot dan latensi' }
+    ]
+  },
   server: {
     emoji: '🖥️',
     title: 'SERVER',
@@ -1120,6 +1127,11 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
 
       // Now safe to return if no text message and not handled by uploadManager
       if (!chatMessage) return;
+      if (chatMessage.trim().toLowerCase() === '/ping') {
+        const latency = Date.now() - (msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now());
+        await sock.sendMessage(remoteJid, { text: `Pong! ${Math.max(0, latency)}ms` }, { quoted: msg });
+        return;
+      }
 
       // === SIAKAD KHS SCRAPPING (KRS/KHS/Transkrip/KTM) ===
       if (chatMessage.trim().toLowerCase() === '/server') {
