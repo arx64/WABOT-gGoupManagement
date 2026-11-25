@@ -616,6 +616,13 @@ const MENU_CATEGORIES = {
       { cmd: '/ai [Pesan]', desc: 'Chat dengan AI' }
     ]
   },
+  server: {
+    emoji: '🖥️',
+    title: 'SERVER',
+    commands: [
+      { cmd: '/server', desc: 'Lihat CPU, RAM, storage, network, dan uptime VPS' }
+    ]
+  },
   edlink: {
     emoji: '📚',
     title: 'AKADEMIK',
@@ -777,6 +784,12 @@ function formatBytes(bytes) {
   return `${(bytes / 1024 ** index).toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
+function formatUptime(seconds) {
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor(seconds % 86400 / 3600);
+  const minutes = Math.floor(seconds % 3600 / 60);
+  return `${days}d ${hours}j ${minutes}m`;
+}
 app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.get('/api/status', (_req, res) => {
   res.json({ service: 'whatsapp-bot', status: whatsappConnection === 'open' ? 'online' : whatsappConnection, whatsapp: whatsappConnection, botPhone: BOT_PHONE || null, uptimeSeconds: Math.floor((Date.now() - processStartedAt) / 1000), checkedAt: new Date().toISOString() });
@@ -1109,6 +1122,36 @@ setInterval(cleanupKhsOutput, 6 * 60 * 60 * 1000);
       if (!chatMessage) return;
 
       // === SIAKAD KHS SCRAPPING (KRS/KHS/Transkrip/KTM) ===
+      if (chatMessage.trim().toLowerCase() === '/server') {
+        try {
+          const network = readLinuxNetworkBytes();
+          const now = Date.now();
+          const elapsed = previousNetworkSample ? Math.max((now - previousNetworkSample.time) / 1000, 0.001) : 0;
+          const download = previousNetworkSample ? (network.download - previousNetworkSample.download) / elapsed : 0;
+          const upload = previousNetworkSample ? (network.upload - previousNetworkSample.upload) / elapsed : 0;
+          previousNetworkSample = { ...network, time: now };
+          const storage = await getStorageUsage();
+          const memoryTotal = os.totalmem();
+          const memoryFree = os.freemem();
+          const text = [
+            '🖥️ *STATUS SERVER VPS*',
+            '',
+            `⚙️ CPU: ${getCpuUsage().toFixed(1)}%`,
+            `🧠 RAM: ${((1 - memoryFree / memoryTotal) * 100).toFixed(1)}% (${formatBytes(memoryTotal - memoryFree)} / ${formatBytes(memoryTotal)})`,
+            `💾 Storage: ${storage.usedPercent === null ? 'tidak tersedia' : `${storage.usedPercent.toFixed(1)}% (${formatBytes(storage.total - storage.free)} / ${formatBytes(storage.total)})`}`,
+            `⬇️ Download: ${formatBytes(Math.max(0, download))}/s`,
+            `⬆️ Upload: ${formatBytes(Math.max(0, upload))}/s`,
+            `⏱️ Uptime VPS: ${formatUptime(Math.floor(os.uptime()))}`,
+            `📱 WhatsApp: ${whatsappConnection === 'open' ? 'online' : whatsappConnection}`,
+            '',
+            `🕒 ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}`,
+          ].join('\n');
+          await sock.sendMessage(remoteJid, { text }, { quoted: m.messages[0] });
+        } catch (error) {
+          await sock.sendMessage(remoteJid, { text: `❌ Gagal membaca status server: ${error.message}` }, { quoted: m.messages[0] });
+        }
+        return;
+      }
       if (handleKhsMessage(sock, chatMessage, remoteJid)) return;
 
       // === PESAN TERJADWAL (SCHEDULED SEND) ===
