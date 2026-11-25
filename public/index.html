@@ -68,6 +68,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     const formatUptime = (seconds) => { const d = Math.floor(seconds / 86400), h = Math.floor(seconds % 86400 / 3600), m = Math.floor(seconds % 3600 / 60); return `${d}d ${h}j ${m}m`; };
+    const formatBytes = (bytes) => { if (!bytes) return '0 B'; const units = ['B','KB','MB','GB']; const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; };
     async function refreshStatus() {
       try {
         const response = await fetch('/api/status', { cache: 'no-store' });
@@ -81,7 +82,7 @@
         $('terminal-uptime').textContent = formatUptime(data.uptimeSeconds);
         $('terminal-checked').textContent = new Date(data.checkedAt).toLocaleTimeString('id-ID');
         $('terminal-message').textContent = online ? 'siap menerima perintah' : 'menunggu koneksi WhatsApp...';
-      } catch (error) {
+      } catch {
         $('status-label').textContent = 'Status tidak tersedia';
         $('status-dot').style.color = '#ff7a90';
         $('terminal-status').textContent = 'offline';
@@ -89,7 +90,6 @@
         $('terminal-message').textContent = 'server tidak merespons';
       }
     }
-    refreshStatus();
     async function refreshServerStats() {
       try {
         const response = await fetch('/api/server-stats', { cache: 'no-store' });
@@ -106,9 +106,10 @@
         $('server-message').textContent = 'metrik server tidak tersedia';
       }
     }
-    const formatBytes = (bytes) => { if (!bytes) return '0 B'; const units = ['B','KB','MB','GB']; const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1); return `${(bytes / 1024 ** i).toFixed(i ? 1 : 0)} ${units[i]}`; };
+    refreshStatus();
     refreshServerStats();
     setInterval(refreshStatus, 10000);
     setInterval(refreshServerStats, 10000);
+  </script>
 </body>
 </html>
