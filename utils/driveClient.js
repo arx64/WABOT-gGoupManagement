@@ -59,12 +59,12 @@ export async function updateGoogleRefreshToken(token, credentials = {}) {
 }
 
 // Validate required environment variables
-function validateEnv() {
+function validateEnv({ requireRefreshToken = true } = {}) {
   const required = [
     'GOOGLE_CLIENT_ID',
     'GOOGLE_CLIENT_SECRET',
     'GOOGLE_REDIRECT_URI',
-    'GOOGLE_REFRESH_TOKEN'
+    ...(requireRefreshToken ? ['GOOGLE_REFRESH_TOKEN'] : []),
   ];
   
   const missing = required.filter(key => !process.env[key]);
@@ -83,8 +83,8 @@ function validateEnv() {
  * Create and configure OAuth2 client
  * @returns {OAuth2Client} Configured OAuth2 client
  */
-export function getOAuthClient() {
-  validateEnv();
+export function getOAuthClient({ requireRefreshToken = true } = {}) {
+  validateEnv({ requireRefreshToken });
   if (oauthClient) return oauthClient;
 
   oauthClient = new google.auth.OAuth2(

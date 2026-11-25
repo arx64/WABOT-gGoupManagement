@@ -114,6 +114,35 @@ export async function queueGoogleOAuthRecovery({ jobId, run, sock, ownerJid }) {
 }
 
 export function registerGoogleOAuthRecoveryRoutes(app) {
+  app.get('/oauth/google', (req, res) => {
+    try {
+      const redirectUri = getPublicRedirectUri();
+      const oauth = getOAuthClient({ requireRefreshToken: false });
+      const state = randomBytes(32).toString('hex');
+      activeFlow = {
+        state,
+        redirectUri,
+        createdAt: Date.now(),
+        jobs: new Map(),
+        sock: null,
+        ownerJid: null,
+        authUrl: null,
+      };
+      const authUrl = oauth.generateAuthUrl({
+        access_type: 'offline',
+        scope: ['https://www.googleapis.com/auth/drive'],
+        prompt: 'consent',
+        include_granted_scopes: true,
+        state,
+      });
+      activeFlow.authUrl = authUrl;
+      return res.redirect(authUrl);
+    } catch (error) {
+      console.error('[GoogleOAuthRecovery] Start OAuth gagal:', error.message);
+      return res.status(500).type('html').send(htmlPage('OAuth belum siap', error.message));
+    }
+  });
+
   app.get(CALLBACK_PATH, async (req, res) => {
     const flow = activeFlow;
     if (!flow || Date.now() - flow.createdAt > FLOW_TTL_MS) {
