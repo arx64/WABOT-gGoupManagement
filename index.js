@@ -729,9 +729,9 @@ function generateMenu(userName, isGroup) {
 }
 
 const app = express();
+app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 // Do not expose the project directory: it contains .env and WhatsApp auth files.
 registerGoogleOAuthRecoveryRoutes(app);
-
 // port: gunakan PORT dari env (Railway, Fly.io, Northflank, Render, dll semua set PORT)
 const PORT = Number(process.env.PORT) || 2004;
 // public host: cek berbagai env umum biar URL QR viewer bener di mana pun di-deploy
