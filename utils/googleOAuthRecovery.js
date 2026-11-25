@@ -161,9 +161,13 @@ export function registerGoogleOAuthRecoveryRoutes(app) {
     if (!code) return res.status(400).type('html').send(htmlPage('Callback tidak lengkap', 'Kode otorisasi tidak ditemukan.'));
 
     try {
-      const oauth = getOAuthClient();
-      // The OAuth client already contains the exact redirect URI from .env.
-      const { tokens } = await oauth.getToken(code);
+      // Callback ini membuat refresh token baru, jadi tidak boleh mensyaratkan
+      // GOOGLE_REFRESH_TOKEN yang justru sedang belum tersedia/kedaluwarsa.
+      const oauth = getOAuthClient({ requireRefreshToken: false });
+      const { tokens } = await oauth.getToken({
+        code,
+        redirect_uri: flow.redirectUri,
+      });
       if (!tokens.refresh_token) {
         throw new Error('Google tidak memberikan refresh token baru. Cabut akses aplikasi di akun Google lalu jalankan /see lagi.');
       }
